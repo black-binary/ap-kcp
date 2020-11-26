@@ -1,0 +1,27 @@
+[package]
+name = "ap_kcp"
+version = "0.1.0"
+authors = ["black-binary <blackbinary@qq.com>"]
+edition = "2018"
+
+[dependencies]
+bytes = "0.6"
+log = "0.4"
+futures = "0.3"
+futures-timer = "3.0"
+smol = "1.2"
+async-trait = "0.1"
+rand = "0.7"
+clap = "2.33"
+env_logger = "0.8"
+bitflags = "1.2"
+
+[dev-dependencies]
+rand = "0.7"
+env_logger = "0.8"
+criterion = "0.3"
+pprof = { version = "0.3", features = ["flamegraph"] } 
+
+[[bench]]
+name = "bench"
+harness = false
