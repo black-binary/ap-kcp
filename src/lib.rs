@@ -1,5 +1,6 @@
 mod async_kcp;
 mod core;
+pub mod crypto;
 pub mod error;
 mod segment;
 
@@ -300,6 +301,27 @@ pub mod test {
             let mut buf = Vec::new();
             buf.resize(100, 0u8);
             assert!(stream1.read_exact(&mut buf).await.is_err());
+        });
+    }
+
+    #[test]
+    fn keep_alive() {
+        init();
+        smol::block_on(async move {
+            let (io1, io2) = NetworkIoSimulator::new(0.0, 10);
+            let mut config = KcpConfig::default();
+            config.timeout = 1000;
+            config.keep_alive_interval = 300;
+            let kcp1 = KcpHandle::new(io1, config.clone());
+            let kcp2 = KcpHandle::new(io2, config.clone());
+            let mut stream1 = kcp1.connect().await.unwrap();
+            let mut stream2 = kcp2.accept().await.unwrap();
+            Timer::after(Duration::from_secs(5)).await;
+            let mut buf = Vec::new();
+            buf.resize(100, 0u8);
+            stream1.write_all(b"hello1").await.unwrap();
+            let len = stream2.read(&mut buf).await.unwrap();
+            assert_eq!(&buf[..len], b"hello1");
         });
     }
 

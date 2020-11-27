@@ -4,6 +4,7 @@ use bytes::Bytes;
 use clap::{App, Arg};
 use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use log::LevelFilter;
+use ring::aead;
 use smol::{
     channel::bounded,
     channel::Receiver,
@@ -19,10 +20,15 @@ mod crypto;
 mod error;
 mod segment;
 
-use crate::{async_kcp::KcpHandle, core::KcpConfig, error::KcpResult};
+use crate::{
+    async_kcp::KcpHandle,
+    core::{KcpConfig, KcpIo},
+    crypto::{AeadCrypto, Crypto, CryptoLayer},
+    error::KcpResult,
+};
 
 #[async_trait::async_trait]
-impl core::KcpIo for smol::net::UdpSocket {
+impl KcpIo for smol::net::UdpSocket {
     async fn send_packet(&self, buf: &[u8]) -> std::io::Result<()> {
         self.send(buf).await?;
         Ok(())
@@ -68,8 +74,8 @@ impl UdpListener {
                         };
                         accept_tx.send(session).await.unwrap();
                         tx.send(payload).await.unwrap();
+                        sessions.retain(|_, tx| !tx.is_closed());
                     }
-                    sessions.retain(|_, tx| !tx.is_closed());
                 }
             })
         };
@@ -81,6 +87,12 @@ struct UdpSession {
     remote: SocketAddr,
     rx: Receiver<Bytes>,
     udp: Arc<UdpSocket>,
+}
+
+impl Drop for UdpSession {
+    fn drop(&mut self) {
+        self.rx.close();
+    }
 }
 
 #[async_trait::async_trait]
@@ -123,7 +135,10 @@ async fn relay<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
     }
 }
 
-async fn client(listener: TcpListener, kcp: KcpHandle<UdpSocket>) -> std::io::Result<()> {
+async fn client<T: crate::core::KcpIo + Send + Sync + 'static>(
+    listener: TcpListener,
+    kcp: KcpHandle<T>,
+) -> std::io::Result<()> {
     loop {
         let (tcp_stream, _) = listener.accept().await?;
         log::info!("tcp accepted");
@@ -146,11 +161,22 @@ async fn client(listener: TcpListener, kcp: KcpHandle<UdpSocket>) -> std::io::Re
     }
 }
 
-async fn server(addr: String, udp: UdpSocket) -> std::io::Result<()> {
+async fn server<C: Crypto + 'static>(
+    addr: String,
+    udp: UdpSocket,
+    crypto: C,
+) -> std::io::Result<()> {
     let listener = UdpListener::new(udp);
-    let mut sessions: Vec<(Arc<KcpHandle<UdpSession>>, Task<KcpResult<()>>)> = Vec::new();
+    let crypto = Arc::new(crypto);
+    let mut sessions: Vec<(
+        Arc<KcpHandle<CryptoLayer<UdpSession, Arc<C>>>>,
+        Task<KcpResult<()>>,
+    )> = Vec::new();
+
     loop {
         let udp_session = listener.accept().await;
+        log::info!("new udp session: {}", udp_session.remote);
+        let udp_session = CryptoLayer::wrap(udp_session, crypto.clone());
         log::trace!("udp session accepted");
         let kcp = Arc::new(KcpHandle::new(udp_session, KcpConfig::default()));
         let t: Task<KcpResult<()>> = {
@@ -227,19 +253,31 @@ fn main() {
                 .short("s")
                 .conflicts_with("client"),
         )
+        .arg(
+            Arg::with_name("password")
+                .long("password")
+                .short("p")
+                .required(true),
+        )
         .get_matches();
     smol::block_on(async move {
         let local = matches.value_of("local").unwrap();
         let remote = matches.value_of("remote").unwrap();
+        let password = matches.value_of("password").unwrap();
+
+        let aead = AeadCrypto::new(password.as_bytes(), &aead::AES_256_GCM);
+
         if matches.is_present("client") {
             let udp = UdpSocket::bind(":::0").await.unwrap();
             udp.connect(remote).await.unwrap();
+            let udp = crypto::CryptoLayer::wrap(udp, aead);
+
             let kcp_handle = KcpHandle::new(udp, KcpConfig::default());
             let listener = TcpListener::bind(local).await.unwrap();
             client(listener, kcp_handle).await.unwrap();
         } else if matches.is_present("server") {
             let udp = UdpSocket::bind(local).await.unwrap();
-            server(remote.to_string(), udp).await.unwrap();
+            server(remote.to_string(), udp, aead).await.unwrap();
         }
     })
 }
@@ -250,11 +288,14 @@ fn simple_iperf() {
     let _ = env_logger::builder()
         .filter_module("ap_kcp", LevelFilter::Info)
         .try_init();
+    let password = "password";
     let t1 = smol::spawn(async move {
         let local = "127.0.0.1:5000";
         let remote = "127.0.0.1:6000";
         let udp = UdpSocket::bind(":::0").await.unwrap();
         udp.connect(remote).await.unwrap();
+        let aead = AeadCrypto::new(password.as_bytes(), &aead::AES_256_GCM);
+        let udp = crypto::CryptoLayer::wrap(udp, aead);
         let kcp_handle = KcpHandle::new(udp, KcpConfig::default());
         let listener = TcpListener::bind(local).await.unwrap();
         client(listener, kcp_handle).await.unwrap();
@@ -264,7 +305,8 @@ fn simple_iperf() {
         let local = "127.0.0.1:6000";
         let remote = "127.0.0.1:5201";
         let udp = UdpSocket::bind(local).await.unwrap();
-        server(remote.to_string(), udp).await.unwrap();
+        let aead = AeadCrypto::new(password.as_bytes(), &aead::AES_256_GCM);
+        server(remote.to_string(), udp, aead).await.unwrap();
     });
     smol::block_on(async {
         t1.race(t2).await;

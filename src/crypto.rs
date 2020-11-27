@@ -1,7 +1,6 @@
 use std::{num::NonZeroU32, sync::Arc};
 
-use ap_kcp::{error::KcpResult, KcpIo};
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 use ring::{
     aead::{self, BoundKey, Nonce, NonceSequence},
     error::Unspecified,
@@ -10,26 +9,34 @@ use ring::{
     rand::SystemRandom,
 };
 
-trait Crypto: Send + Sync {
+use crate::core::KcpIo;
+
+pub trait Crypto: Send + Sync {
     fn encrypt(&self, buf: &[u8]) -> Bytes;
     fn decrypt(&self, buf: &mut [u8]) -> usize;
 }
 
-struct CryptoLayer<IO, C> {
-    crypto: C,
+pub struct CryptoLayer<IO, C> {
     io: IO,
+    crypto: C,
+}
+
+impl<IO: KcpIo + Send + Sync, C: Crypto> CryptoLayer<IO, C> {
+    pub fn wrap(io: IO, crypto: C) -> Self {
+        Self { io, crypto }
+    }
 }
 
 #[async_trait::async_trait]
-impl<C: Crypto, IO: KcpIo + Send + Sync> KcpIo for CryptoLayer<IO, C> {
+impl<IO: KcpIo + Send + Sync, C: Crypto> KcpIo for CryptoLayer<IO, C> {
     async fn send_packet(&self, buf: &[u8]) -> std::io::Result<()> {
-        let cipher = self.crypto.encrypt(buf);
-        self.io.send_packet(&cipher).await
+        let ciphertext = self.crypto.encrypt(buf);
+        self.io.send_packet(&ciphertext).await
     }
 
     async fn recv_packet(&self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.io.recv_packet(buf).await?;
-        let size = self.crypto.decrypt(buf);
+        let len = self.io.recv_packet(buf).await?;
+        let size = self.crypto.decrypt(&mut buf[..len]);
         Ok(size)
     }
 }
@@ -58,7 +65,7 @@ impl<'a> OneNonceSequence<'a> {
     }
 }
 
-struct AeadCrypto {
+pub struct AeadCrypto {
     key_bytes: Bytes,
     algorithm: &'static aead::Algorithm,
     random: SystemRandom,
@@ -82,6 +89,16 @@ impl AeadCrypto {
             algorithm,
             random: SystemRandom::new(),
         }
+    }
+}
+
+impl<C: Crypto> Crypto for Arc<C> {
+    fn encrypt(&self, buf: &[u8]) -> Bytes {
+        C::encrypt(self, buf)
+    }
+
+    fn decrypt(&self, buf: &mut [u8]) -> usize {
+        C::decrypt(self, buf)
     }
 }
 
@@ -124,6 +141,7 @@ impl Crypto for AeadCrypto {
         {
             plaintext.len()
         } else {
+            log::error!("failed to decrypt aead packet");
             0
         }
     }
@@ -143,5 +161,11 @@ mod test {
         assert!(len != 0);
         println!("{:?}", plaintext);
         assert_eq!(b"some plaintext", &plaintext[..len]);
+
+        let mut plaintext = BytesMut::new();
+        plaintext.extend_from_slice(&ciphertext);
+        plaintext[0] = 0;
+        let len = crypto.decrypt(&mut plaintext);
+        assert!(len == 0);
     }
 }

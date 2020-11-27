@@ -284,7 +284,7 @@ impl<IO: KcpIo + Send + Sync + 'static> KcpHandle<IO> {
         dead_tx: Sender<u16>,
     ) -> KcpResult<()> {
         let mut buf = Vec::new();
-        buf.resize(config.mtu, 0);
+        buf.resize(2 * config.mtu, 0);
         loop {
             let size = io.recv_packet(&mut buf).await?;
             if size < HEADER_SIZE {

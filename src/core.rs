@@ -370,7 +370,9 @@ impl KcpCore {
                 CMD_PUSH => {
                     self.handle_push(segment);
                 }
-                CMD_PING => {}
+                CMD_PING => {
+                    log::trace!("input ping");
+                }
                 _ => unreachable!(),
             }
         }
