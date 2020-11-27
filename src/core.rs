@@ -731,7 +731,7 @@ impl KcpCore {
         }
 
         if !self.buffer.is_empty() {
-            io.send_packet(&self.buffer).await?;
+            io.send_packet(&mut self.buffer).await?;
             self.buffer.clear();
         }
 
