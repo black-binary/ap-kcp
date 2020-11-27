@@ -322,6 +322,11 @@ pub mod test {
             stream1.write_all(b"hello1").await.unwrap();
             let len = stream2.read(&mut buf).await.unwrap();
             assert_eq!(&buf[..len], b"hello1");
+            Timer::after(Duration::from_secs(5)).await;
+
+            stream1.write_all(b"hello2").await.unwrap();
+            let len = stream2.read(&mut buf).await.unwrap();
+            assert_eq!(&buf[..len], b"hello2");
         });
     }
 

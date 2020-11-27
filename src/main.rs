@@ -257,6 +257,7 @@ fn main() {
             Arg::with_name("password")
                 .long("password")
                 .short("p")
+                .takes_value(true)
                 .required(true),
         )
         .get_matches();
@@ -271,7 +272,6 @@ fn main() {
             let udp = UdpSocket::bind(":::0").await.unwrap();
             udp.connect(remote).await.unwrap();
             let udp = crypto::CryptoLayer::wrap(udp, aead);
-
             let kcp_handle = KcpHandle::new(udp, KcpConfig::default());
             let listener = TcpListener::bind(local).await.unwrap();
             client(listener, kcp_handle).await.unwrap();
