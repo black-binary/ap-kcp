@@ -209,11 +209,11 @@ async fn server<C: Crypto + 'static>(
         sessions.retain(|(handle, _)| {
             let ok = smol::block_on(async {
                 let count = handle.get_stream_count().await;
-                log::info!("{}", count);
+                log::debug!("count = {}", count);
                 count > 0
             });
             if !ok {
-                log::info!("remove kcp handle");
+                log::info!("removing kcp handle");
             }
             ok
         });
@@ -221,11 +221,18 @@ async fn server<C: Crypto + 'static>(
     }
 }
 
+fn get_algorithm(name: &str) -> &'static aead::Algorithm {
+    match name {
+        "aes-128-gcm" => &aead::AES_128_GCM,
+        "aes-256-gcm" => &aead::AES_256_GCM,
+        "chacha20-poly1305" => &aead::CHACHA20_POLY1305,
+        _ => {
+            panic!("no algorithm named {}", name)
+        }
+    }
+}
+
 fn main() {
-    std::env::set_var("SMOL_THREADS", "8");
-    let _ = env_logger::builder()
-        .filter_module("ap_kcp", LevelFilter::Info)
-        .try_init();
     let matches = App::new("ap_kcp")
         .arg(
             Arg::with_name("local")
@@ -260,13 +267,48 @@ fn main() {
                 .takes_value(true)
                 .required(true),
         )
+        .arg(
+            Arg::with_name("algorithm")
+                .long("algorithm")
+                .short("a")
+                .takes_value(true)
+                .required(true)
+                .validator(|name| match name.as_str() {
+                    "aes-256-gcm" => Ok(()),
+                    "aes-128-gcm" => Ok(()),
+                    "chacha20-poly1305" => Ok(()),
+                    _ => Err(
+                        "Valid crypto algorithm: aes-256-gcm, aes-128-gcm, chacha20-poly1305"
+                            .to_string(),
+                    ),
+                })
+                .default_value("aes-256-gcm"),
+        )
+        .arg(
+            Arg::with_name("congestion")
+                .long("congestion")
+                .short("C")
+                .takes_value(true)
+                .required(false),
+        )
+        .author("black-binary")
+        .version("0.1.0")
         .get_matches();
+
+    let thread = num_cpus::get() + 2;
+    std::env::set_var("SMOL_THREADS", thread.to_string());
+
+    let _ = env_logger::builder()
+        .filter_module("ap_kcp", LevelFilter::Info)
+        .try_init();
+
     smol::block_on(async move {
         let local = matches.value_of("local").unwrap();
         let remote = matches.value_of("remote").unwrap();
         let password = matches.value_of("password").unwrap();
+        let algorithm_name = matches.value_of("algorithm").unwrap();
 
-        let aead = AeadCrypto::new(password.as_bytes(), &aead::AES_256_GCM);
+        let aead = AeadCrypto::new(password.as_bytes(), get_algorithm(algorithm_name));
 
         if matches.is_present("client") {
             let udp = UdpSocket::bind(":::0").await.unwrap();

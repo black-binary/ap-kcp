@@ -16,6 +16,11 @@ clap = "2.33"
 env_logger = "0.8"
 bitflags = "1.2"
 ring = "0.16"
+num_cpus = "1.13"
+
+[profile.release]
+lto = "fat"
+codegen-units = 4
 
 [dev-dependencies]
 rand = "0.7"

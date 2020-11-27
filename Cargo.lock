@@ -55,6 +55,7 @@ dependencies = [
  "futures",
  "futures-timer",
  "log",
+ "num_cpus",
  "pprof",
  "rand",
  "ring",

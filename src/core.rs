@@ -16,7 +16,6 @@ use crate::{
 };
 
 pub const RTO_INIT: u32 = 200;
-pub const RTO_MAX: u32 = 60000;
 pub const SSTHRESH_MIN: u16 = 2;
 
 #[async_trait::async_trait]
@@ -209,7 +208,7 @@ impl KcpCore {
             }
         }
         let rto = self.srtt + cmp::max(self.config.max_interval, 4 * self.rttval);
-        self.rto = bound(self.config.min_rto, rto, RTO_MAX);
+        self.rto = bound(self.config.min_rto, rto, self.config.timeout);
         log::trace!("update srtt = {}, rto = {}", self.srtt, rto);
     }
 
