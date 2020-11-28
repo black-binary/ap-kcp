@@ -147,9 +147,12 @@ impl KcpConfig {
     }
 }
 
-#[test]
-fn deserialize() {
-    let s = r#"
+#[cfg(test)]
+mod test {
+    use super::*;
+    #[test]
+    fn deserialize() {
+        let s = r#"
     max_interval = 10
     min_interval = 100
     nodelay = false
@@ -165,10 +168,11 @@ fn deserialize() {
     timeout = 5000
     keep_alive_interval = 1500
     "#;
-    let config = toml::from_str::<KcpConfig>(s).unwrap();
-    assert_eq!(config.max_interval, 1234);
-    assert_eq!(config.min_interval, 5678);
-    assert_eq!(config.congestion, Congestion::None);
+        let config = toml::from_str::<KcpConfig>(s).unwrap();
+        assert_eq!(config.max_interval, 10);
+        assert_eq!(config.min_interval, 100);
+        assert_eq!(config.congestion, Congestion::LossTolerance);
+    }
 }
 
 struct SendingKcpSegment {

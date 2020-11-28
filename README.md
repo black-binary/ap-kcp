@@ -60,6 +60,24 @@ AP-KCP 的二进制发行版本是一个基于 UDP 的加密隧道。
 
 * chacha20-poly1305
 
+## 编译
+
+编译需要使用 rust 工具链。
+
+```shell
+git clone https://github.com/black-binary/ap-kcp.git
+cd ap-kcp
+cargo build --release
+```
+
+如果你需要静态链接，可以换用 `x86_64-unknown-linux-musl` 或者其他 musl 工具链
+
+```shell
+cargo build --release --target x86_64-unknown-linux-musl
+```
+
+然后去喝一杯咖啡。
+
 ## 细节
 
 ### 规格
