@@ -294,28 +294,25 @@ impl<IO: KcpIo + Send + Sync + 'static> KcpHandle<IO> {
         dead_tx: Sender<u16>,
     ) -> KcpResult<()> {
         let mut buf = Vec::new();
-        buf.resize(2 * config.mtu, 0);
         loop {
-            let size = match io.recv_packet(&mut buf).await {
-                Ok(size) => size,
-                Err(e) => {
-                    log::error!("recv error: {}", e);
-                    return Err(KcpError::IoError(e));
-                }
-            };
-            if size < HEADER_SIZE {
-                log::error!("short packet length {}", size);
+            buf.resize(2 * config.mtu, 0);
+            if let Err(e) = io.recv_packet(&mut buf).await {
+                log::error!("recv error: {}", e);
+                return Err(KcpError::IoError(e));
+            }
+            if buf.len() < HEADER_SIZE {
+                log::error!("short packet length {}", buf.len());
                 continue;
             }
 
-            let stream_id = KcpSegment::peek_stream_id(&buf[..size]);
-            let mut packet = &buf[..size];
+            let stream_id = KcpSegment::peek_stream_id(&buf);
+            let mut cursor = buf.as_slice();
             let mut segments = Vec::new();
             let mut is_invalid_packet = false;
             let mut new_stream = false;
 
-            while packet.has_remaining() {
-                match KcpSegment::decode(&packet) {
+            while cursor.has_remaining() {
+                match KcpSegment::decode(&cursor) {
                     Ok(segment) => {
                         if segment.stream_id != stream_id {
                             is_invalid_packet = true;
@@ -328,7 +325,7 @@ impl<IO: KcpIo + Send + Sync + 'static> KcpHandle<IO> {
                         {
                             new_stream = true;
                         }
-                        packet.advance(segment.encoded_len());
+                        cursor.advance(segment.encoded_len());
                         segments.push(segment);
                     }
                     Err(e) => {

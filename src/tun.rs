@@ -29,14 +29,15 @@ use crate::{
 
 #[async_trait::async_trait]
 impl KcpIo for smol::net::UdpSocket {
-    async fn send_packet(&self, buf: &[u8]) -> std::io::Result<()> {
+    async fn send_packet(&self, buf: &mut Vec<u8>) -> std::io::Result<()> {
         self.send(buf).await?;
         Ok(())
     }
 
-    async fn recv_packet(&self, buf: &mut [u8]) -> std::io::Result<usize> {
+    async fn recv_packet(&self, buf: &mut Vec<u8>) -> std::io::Result<()> {
         let size = self.recv(buf).await?;
-        Ok(size)
+        buf.truncate(size);
+        Ok(())
     }
 }
 
@@ -97,12 +98,12 @@ impl Drop for UdpSession {
 
 #[async_trait::async_trait]
 impl core::KcpIo for UdpSession {
-    async fn send_packet(&self, buf: &[u8]) -> std::io::Result<()> {
+    async fn send_packet(&self, buf: &mut Vec<u8>) -> std::io::Result<()> {
         self.udp.send_to(buf, self.remote).await?;
         Ok(())
     }
 
-    async fn recv_packet(&self, buf: &mut [u8]) -> std::io::Result<usize> {
+    async fn recv_packet(&self, buf: &mut Vec<u8>) -> std::io::Result<()> {
         loop {
             let payload = self
                 .rx
@@ -114,8 +115,9 @@ impl core::KcpIo for UdpSession {
                 continue;
             }
             let len = payload.len();
-            buf[..len].copy_from_slice(&payload);
-            return Ok(len);
+            buf.resize(len, 0);
+            buf.copy_from_slice(&payload);
+            return Ok(());
         }
     }
 }

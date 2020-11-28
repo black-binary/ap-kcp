@@ -22,8 +22,8 @@ pub const MAX_WINDOW_SIZE: u16 = 0x8000;
 
 #[async_trait::async_trait]
 pub trait KcpIo {
-    async fn send_packet(&self, buf: &[u8]) -> std::io::Result<()>;
-    async fn recv_packet(&self, buf: &mut [u8]) -> std::io::Result<usize>;
+    async fn send_packet(&self, buf: &mut Vec<u8>) -> std::io::Result<()>;
+    async fn recv_packet(&self, buf: &mut Vec<u8>) -> std::io::Result<()>;
 }
 
 #[inline(always)]
@@ -101,8 +101,8 @@ impl Default for KcpConfig {
             min_interval: 10,
             max_interval: 100,
             nodelay: false,
-            mtu: 1350,
-            mss: 1350 - HEADER_SIZE,
+            mtu: 1400 - 28,
+            mss: 1400 - 28 - HEADER_SIZE,
             fast_rexmit_thresh: 3,
             fast_ack_thresh: 32,
             congestion: Congestion::LossTolerance,
@@ -213,7 +213,7 @@ pub(crate) struct KcpCore {
     close_state: CloseFlags,
     close_ts: u32,
 
-    buffer: BytesMut,
+    buffer: Vec<u8>,
 
     pub config: Arc<KcpConfig>,
 
@@ -627,7 +627,7 @@ impl KcpCore {
     #[inline]
     async fn encode_segment<IO: KcpIo>(
         segment: &KcpSegment,
-        buffer: &mut BytesMut,
+        buffer: &mut Vec<u8>,
         io: &IO,
         mtu: usize,
     ) -> KcpResult<()> {
@@ -921,7 +921,7 @@ impl KcpCore {
             now: now,
             ping_ts: 0,
 
-            buffer: BytesMut::with_capacity(config.mtu),
+            buffer: Vec::with_capacity(config.mtu * 2),
 
             send_waker: None,
             recv_waker: None,

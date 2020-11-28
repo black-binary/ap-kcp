@@ -18,14 +18,15 @@ pub use async_trait::async_trait;
 pub mod prelude {
     #[async_trait::async_trait]
     impl crate::KcpIo for smol::net::UdpSocket {
-        async fn send_packet(&self, buf: &[u8]) -> std::io::Result<()> {
+        async fn send_packet(&self, buf: &mut Vec<u8>) -> std::io::Result<()> {
             self.send(buf).await?;
             Ok(())
         }
 
-        async fn recv_packet(&self, buf: &mut [u8]) -> std::io::Result<usize> {
+        async fn recv_packet(&self, buf: &mut Vec<u8>) -> std::io::Result<()> {
             let size = self.recv(buf).await?;
-            Ok(size)
+            buf.truncate(size);
+            Ok(())
         }
     }
 }
@@ -180,7 +181,7 @@ pub mod test {
 
     #[async_trait::async_trait]
     impl KcpIo for NetworkIoSimulator {
-        async fn send_packet(&self, buf: &[u8]) -> std::io::Result<()> {
+        async fn send_packet(&self, buf: &mut Vec<u8>) -> std::io::Result<()> {
             let tx = self.tx.clone();
             let delay = self.delay;
             let loss = self.packet_loss;
@@ -197,14 +198,15 @@ pub mod test {
             Ok(())
         }
 
-        async fn recv_packet(&self, buf: &mut [u8]) -> std::io::Result<usize> {
+        async fn recv_packet(&self, buf: &mut Vec<u8>) -> std::io::Result<()> {
             let packet = self
                 .rx
                 .recv()
                 .await
                 .map_err(|_| std::io::ErrorKind::ConnectionReset)?;
-            buf[..packet.len()].copy_from_slice(&packet[..]);
-            Ok(packet.len())
+            buf.resize(packet.len(), 0);
+            buf.copy_from_slice(&packet);
+            Ok(())
         }
     }
 

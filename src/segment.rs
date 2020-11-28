@@ -1,4 +1,4 @@
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes};
 
 use crate::error::{KcpError, KcpResult};
 
@@ -65,7 +65,7 @@ impl KcpSegment {
         Ok(segment)
     }
 
-    pub fn encode(&self, buf: &mut BytesMut) {
+    pub fn encode(&self, buf: &mut Vec<u8>) {
         buf.put_u16_le(self.stream_id);
         buf.put_u8(self.command);
         buf.put_u16_le(self.recv_window_size);
@@ -97,7 +97,7 @@ mod test {
             data: Bytes::copy_from_slice(b"hello_world!"),
         };
 
-        let mut buf = BytesMut::new();
+        let mut buf = Vec::new();
         segment1.encode(&mut buf);
         assert_eq!(buf.len(), segment1.encoded_len());
 
