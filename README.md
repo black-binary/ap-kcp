@@ -67,13 +67,13 @@ AP-KCP 的二进制发行版本是一个基于 UDP 的加密隧道。
 ```shell
 git clone https://github.com/black-binary/ap-kcp.git
 cd ap-kcp
-cargo build --release
+make
 ```
 
 如果你需要静态链接，可以换用 `x86_64-unknown-linux-musl` 或者其他 musl 工具链
 
 ```shell
-cargo build --release --target x86_64-unknown-linux-musl
+make x86_64-unknown-linux-musl
 ```
 
 然后去喝一杯咖啡。

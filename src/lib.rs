@@ -1,6 +1,9 @@
 mod async_kcp;
 mod core;
+
+#[cfg(feature = "ring")]
 pub mod crypto;
+
 pub mod error;
 mod segment;
 

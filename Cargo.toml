@@ -8,18 +8,18 @@ edition = "2018"
 bytes = "0.6"
 log = "0.4"
 futures = "0.3"
-futures-timer = "3.0"
 smol = "1.2"
 async-trait = "0.1"
 rand = "0.7"
-clap = "2.33"
 env_logger = "0.8"
 bitflags = "1.2"
-ring = "0.16"
-num_cpus = "1.13"
-serde = "1.0"
-serde_derive  = "1.0"
-toml = "0.5"
+
+num_cpus = {version = "1.13", optional = true}
+serde = {version = "1.0", optional = true}
+serde_derive = {version = "1.0", optional = true}
+toml = {version = "0.5", optional = true}
+ring = {version = "0.16", optional = true}
+clap = {version = "2.33", optional = true}
 
 [profile.release]
 lto = "fat"
@@ -30,6 +30,18 @@ rand = "0.7"
 env_logger = "0.8"
 criterion = "0.3"
 pprof = { version = "0.3", features = ["flamegraph"] } 
+toml = "0.5"
+
+[features]
+serde_support = ["serde", "serde_derive"]
+crypto_support = ["ring"]
+build_binary = ["clap", "toml", "crypto_support", "num_cpus", "serde_support"]
+full = ["serde_support", "crypto_support"]
+
+[[bin]]
+name = "ap-kcp-tun"
+path = "src/tun.rs"
+required-features = ["build_binary"]
 
 [[bench]]
 name = "bench"

@@ -51,6 +51,7 @@ pub enum Congestion {
     LossTolerance,
 }
 
+#[cfg(feature = "serde_support")]
 impl<'de> serde::Deserialize<'de> for Congestion {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -75,7 +76,8 @@ bitflags! {
     }
 }
 
-#[derive(Clone, serde_derive::Deserialize, Debug)]
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde_support", derive(serde_derive::Deserialize))]
 pub struct KcpConfig {
     pub max_interval: u32,
     pub min_interval: u32,
@@ -149,9 +151,10 @@ impl KcpConfig {
 
 #[cfg(test)]
 mod test {
-    use super::*;
+    #[cfg(feature = "serde_support")]
     #[test]
     fn deserialize() {
+        use super::*;
         let s = r#"
     max_interval = 10
     min_interval = 100
