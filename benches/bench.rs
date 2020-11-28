@@ -27,10 +27,10 @@ fn init() {
 fn udp(data: Arc<Vec<u8>>) {
     smol::block_on(async move {
         let (io1, io2) = get_udp_pair().await;
-        let handle1 = ap_kcp::KcpHandle::new(io1, ap_kcp::KcpConfig::default());
+        let handle1 = ap_kcp::KcpHandle::new(io1, ap_kcp::KcpConfig::default()).unwrap();
         let data1 = data.clone();
         let t = smol::spawn(async move {
-            let handle2 = ap_kcp::KcpHandle::new(io2, ap_kcp::KcpConfig::default());
+            let handle2 = ap_kcp::KcpHandle::new(io2, ap_kcp::KcpConfig::default()).unwrap();
             let mut stream2 = handle2.accept().await.unwrap();
             let mut buf = Vec::new();
             buf.resize(data1.len(), 0);

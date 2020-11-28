@@ -59,7 +59,10 @@ dependencies = [
  "pprof",
  "rand",
  "ring",
+ "serde",
+ "serde_derive",
  "smol",
+ "toml",
 ]
 
 [[package]]
@@ -1514,6 +1517,15 @@ checksum = "6d3dc76004a03cec1c5932bca4cdc2e39aaa798e3f82363dd94f9adf6098c12f"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "toml"
+version = "0.5.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75cf45bb0bef80604d001caaec0d09da99611b3c0fd39d3080468875cdb65645"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

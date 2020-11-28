@@ -1,4 +1,4 @@
-use std::{collections::HashMap, net::SocketAddr, sync::Arc};
+use std::{collections::HashMap, fs, net::SocketAddr, sync::Arc};
 
 use bytes::Bytes;
 use clap::{App, Arg};
@@ -135,15 +135,20 @@ async fn relay<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
     }
 }
 
-async fn client<T: crate::core::KcpIo + Send + Sync + 'static>(
-    listener: TcpListener,
-    kcp: KcpHandle<T>,
+async fn client<C: Crypto + 'static>(
+    local: String,
+    crypto: C,
+    udp: UdpSocket,
+    config: KcpConfig,
 ) -> std::io::Result<()> {
+    let udp = CryptoLayer::wrap(udp, crypto);
+    let kcp_handle = KcpHandle::new(udp, config)?;
+    let listener = TcpListener::bind(local).await?;
     loop {
-        let (tcp_stream, _) = listener.accept().await?;
-        log::info!("tcp accepted");
-        let kcp_stream = kcp.connect().await?;
-        log::info!("kcp connected");
+        let (tcp_stream, addr) = listener.accept().await?;
+        log::info!("tcp socket accepted: {}", addr);
+        let kcp_stream = kcp_handle.connect().await?;
+        log::info!("kcp tunnel established");
         let t: Task<KcpResult<()>> = smol::spawn(async move {
             let mut tcp_reader = tcp_stream;
             let mut tcp_writer = tcp_reader.clone();
@@ -154,7 +159,7 @@ async fn client<T: crate::core::KcpIo + Send + Sync + 'static>(
             let mut kcp_stream = kcp_reader.reunite(kcp_writer).unwrap();
             kcp_stream.close().await?;
             tcp_writer.close().await?;
-            log::info!("client relay ends");
+            log::info!("client-side tunnel closed");
             Ok(())
         });
         t.detach();
@@ -165,7 +170,9 @@ async fn server<C: Crypto + 'static>(
     addr: String,
     udp: UdpSocket,
     crypto: C,
+    config: KcpConfig,
 ) -> std::io::Result<()> {
+    config.check()?;
     let listener = UdpListener::new(udp);
     let crypto = Arc::new(crypto);
     let mut sessions: Vec<(
@@ -175,10 +182,9 @@ async fn server<C: Crypto + 'static>(
 
     loop {
         let udp_session = listener.accept().await;
-        log::info!("new udp session: {}", udp_session.remote);
+        log::trace!("udp session accepted: {}", udp_session.remote);
         let udp_session = CryptoLayer::wrap(udp_session, crypto.clone());
-        log::trace!("udp session accepted");
-        let kcp = Arc::new(KcpHandle::new(udp_session, KcpConfig::default()));
+        let kcp = Arc::new(KcpHandle::new(udp_session, config.clone()).unwrap());
         let t: Task<KcpResult<()>> = {
             let addr = addr.clone();
             let kcp = kcp.clone();
@@ -186,9 +192,9 @@ async fn server<C: Crypto + 'static>(
                 let mut relay_task = Vec::new();
                 loop {
                     let kcp_stream = kcp.accept().await?;
-                    log::info!("kcp accepted");
+                    log::info!("kcp tunnel established");
                     let tcp_stream = TcpStream::connect(addr.clone()).await?;
-                    log::info!("tcp connected");
+                    log::info!("tunneling to {}", addr);
                     let t: Task<KcpResult<()>> = smol::spawn(async move {
                         let mut tcp_reader = tcp_stream;
                         let mut tcp_writer = tcp_reader.clone();
@@ -199,7 +205,7 @@ async fn server<C: Crypto + 'static>(
                         let mut kcp_stream = kcp_reader.reunite(kcp_writer).unwrap();
                         kcp_stream.close().await?;
                         tcp_writer.close().await?;
-                        log::info!("server relay ends");
+                        log::info!("server-side tunnel closed");
                         Ok(())
                     });
                     relay_task.push(t);
@@ -285,9 +291,9 @@ fn main() {
                 .default_value("aes-256-gcm"),
         )
         .arg(
-            Arg::with_name("congestion")
-                .long("congestion")
-                .short("C")
+            Arg::with_name("kcp-config")
+                .long("kcp-config")
+                .short("k")
                 .takes_value(true)
                 .required(false),
         )
@@ -302,24 +308,39 @@ fn main() {
         .filter_module("ap_kcp", LevelFilter::Info)
         .try_init();
 
+    let config = match matches.value_of("kcp-config") {
+        Some(path) => {
+            let content = fs::read_to_string(path).unwrap();
+            let config = toml::from_str::<KcpConfig>(&content).unwrap();
+            config
+        }
+        None => KcpConfig::default(),
+    };
+
     smol::block_on(async move {
         let local = matches.value_of("local").unwrap();
         let remote = matches.value_of("remote").unwrap();
         let password = matches.value_of("password").unwrap();
         let algorithm_name = matches.value_of("algorithm").unwrap();
-
         let aead = AeadCrypto::new(password.as_bytes(), get_algorithm(algorithm_name));
 
         if matches.is_present("client") {
+            log::info!("ap-kcp client");
+            log::info!("listening on {}, tunneling via {}", local, remote);
+            log::info!("algorithm: {}", algorithm_name);
+            log::info!("settings: {:?}", config);
             let udp = UdpSocket::bind(":::0").await.unwrap();
             udp.connect(remote).await.unwrap();
-            let udp = crypto::CryptoLayer::wrap(udp, aead);
-            let kcp_handle = KcpHandle::new(udp, KcpConfig::default());
-            let listener = TcpListener::bind(local).await.unwrap();
-            client(listener, kcp_handle).await.unwrap();
+            client(local.to_string(), aead, udp, config).await.unwrap();
         } else if matches.is_present("server") {
+            log::info!("ap-kcp server");
+            log::info!("listening on {}, tunneling to {}", local, remote);
+            log::info!("algorithm: {}", algorithm_name);
+            log::info!("settings: {:?}", config);
             let udp = UdpSocket::bind(local).await.unwrap();
-            server(remote.to_string(), udp, aead).await.unwrap();
+            server(remote.to_string(), udp, aead, config).await.unwrap();
+        } else {
+            log::warn!("neither --server or --client is specified")
         }
     })
 }
@@ -337,10 +358,8 @@ fn simple_iperf() {
         let udp = UdpSocket::bind(":::0").await.unwrap();
         udp.connect(remote).await.unwrap();
         let aead = AeadCrypto::new(password.as_bytes(), &aead::AES_256_GCM);
-        let udp = crypto::CryptoLayer::wrap(udp, aead);
-        let kcp_handle = KcpHandle::new(udp, KcpConfig::default());
-        let listener = TcpListener::bind(local).await.unwrap();
-        client(listener, kcp_handle).await.unwrap();
+        let config = KcpConfig::default();
+        client(local.to_string(), aead, udp, config).await.unwrap();
     });
 
     let t2 = smol::spawn(async move {
@@ -348,7 +367,8 @@ fn simple_iperf() {
         let remote = "127.0.0.1:5201";
         let udp = UdpSocket::bind(local).await.unwrap();
         let aead = AeadCrypto::new(password.as_bytes(), &aead::AES_256_GCM);
-        server(remote.to_string(), udp, aead).await.unwrap();
+        let config = KcpConfig::default();
+        server(remote.to_string(), udp, aead, config).await.unwrap();
     });
     smol::block_on(async {
         t1.race(t2).await;

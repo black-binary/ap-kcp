@@ -57,8 +57,8 @@ pub mod test {
     }
 
     async fn send_recv<T: KcpIo + Send + Sync + 'static>(io1: T, io2: T) {
-        let kcp1 = KcpHandle::new(io1, KcpConfig::default());
-        let kcp2 = KcpHandle::new(io2, KcpConfig::default());
+        let kcp1 = KcpHandle::new(io1, KcpConfig::default()).unwrap();
+        let kcp2 = KcpHandle::new(io2, KcpConfig::default()).unwrap();
 
         smol::spawn(async move {
             let mut stream1 = kcp1.connect().await.unwrap();
@@ -106,7 +106,7 @@ pub mod test {
 
         let data1 = data.clone();
         let t1 = smol::spawn(async move {
-            let kcp1 = KcpHandle::new(io1, KcpConfig::default());
+            let kcp1 = KcpHandle::new(io1, KcpConfig::default()).unwrap();
             let mut tasks = Vec::new();
             for _ in 0..10 {
                 let mut stream1 = kcp1.connect().await.unwrap();
@@ -127,7 +127,7 @@ pub mod test {
 
         let data2 = data.clone();
         let t2 = smol::spawn(async move {
-            let kcp2 = KcpHandle::new(io2, KcpConfig::default());
+            let kcp2 = KcpHandle::new(io2, KcpConfig::default()).unwrap();
             let mut tasks = Vec::new();
             for _ in 0..10 {
                 let mut stream2 = kcp2.accept().await.unwrap();
@@ -263,7 +263,7 @@ pub mod test {
         init();
         smol::block_on(async move {
             let (io1, _io2) = NetworkIoSimulator::new(0.0, 10);
-            let kcp1 = KcpHandle::new(io1, KcpConfig::default());
+            let kcp1 = KcpHandle::new(io1, KcpConfig::default()).unwrap();
             let mut stream1 = kcp1.connect().await.unwrap();
             drop(kcp1);
             let mut buf = Vec::new();
@@ -277,7 +277,7 @@ pub mod test {
         init();
         smol::block_on(async move {
             let (io1, _io2) = NetworkIoSimulator::new(0.0, 10);
-            let kcp1 = KcpHandle::new(io1, KcpConfig::default());
+            let kcp1 = KcpHandle::new(io1, KcpConfig::default()).unwrap();
             let stream1 = kcp1.connect().await.unwrap();
             assert_eq!(kcp1.get_stream_count().await, 1);
             drop(stream1);
@@ -295,8 +295,8 @@ pub mod test {
         smol::block_on(async move {
             let (io1, io2) = NetworkIoSimulator::new(1.0, 500);
             let config = KcpConfig::default();
-            let kcp1 = KcpHandle::new(io1, config.clone());
-            let _kcp2 = KcpHandle::new(io2, config.clone());
+            let kcp1 = KcpHandle::new(io1, config.clone()).unwrap();
+            let _kcp2 = KcpHandle::new(io2, config.clone()).unwrap();
             let mut stream1 = kcp1.connect().await.unwrap();
             let mut buf = Vec::new();
             buf.resize(100, 0u8);
@@ -312,8 +312,8 @@ pub mod test {
             let mut config = KcpConfig::default();
             config.timeout = 1000;
             config.keep_alive_interval = 300;
-            let kcp1 = KcpHandle::new(io1, config.clone());
-            let kcp2 = KcpHandle::new(io2, config.clone());
+            let kcp1 = KcpHandle::new(io1, config.clone()).unwrap();
+            let kcp2 = KcpHandle::new(io2, config.clone()).unwrap();
             let mut stream1 = kcp1.connect().await.unwrap();
             let mut stream2 = kcp2.accept().await.unwrap();
             Timer::after(Duration::from_secs(5)).await;
@@ -337,8 +337,8 @@ pub mod test {
             let (io1, io2) = NetworkIoSimulator::new(1.0, 10);
             let mut config = KcpConfig::default();
             config.max_rexmit_time = 8;
-            let kcp1 = KcpHandle::new(io1, config.clone());
-            let _kcp2 = KcpHandle::new(io2, config.clone());
+            let kcp1 = KcpHandle::new(io1, config.clone()).unwrap();
+            let _kcp2 = KcpHandle::new(io2, config.clone()).unwrap();
             let mut stream1 = kcp1.connect().await.unwrap();
             stream1.write(b"test").await.unwrap();
             let mut buf = Vec::new();
@@ -354,13 +354,13 @@ pub mod test {
 
             let t = smol::spawn(async move {
                 let config = KcpConfig::default();
-                let kcp1 = KcpHandle::new(io1, config);
+                let kcp1 = KcpHandle::new(io1, config).unwrap();
                 let mut stream1 = kcp1.connect().await.unwrap();
                 stream1.write(b"test").await.unwrap();
                 stream1.close().await.unwrap();
             });
             let config = KcpConfig::default();
-            let kcp2 = KcpHandle::new(io2, config);
+            let kcp2 = KcpHandle::new(io2, config).unwrap();
             let mut buf = Vec::new();
             let mut stream2 = kcp2.accept().await.unwrap();
             stream2.read(&mut buf).await.unwrap();

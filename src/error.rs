@@ -11,6 +11,7 @@ pub enum KcpError {
     Timeout,
     NoResponse,
     Shutdown(String),
+    InvalidConfig(String),
 }
 
 impl StdError for KcpError {}

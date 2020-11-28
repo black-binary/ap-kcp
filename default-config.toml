@@ -1,0 +1,14 @@
+max_interval = 10
+min_interval = 100
+nodelay = false
+mtu = 1350
+mss = 1331
+fast_rexmit_thresh = 3
+fast_ack_thresh = 32
+congestion = "loss_tolerance"
+max_rexmit_time = 32
+min_rto = 20
+send_window_size = 0x800
+recv_window_size = 0x800
+timeout = 5000
+keep_alive_interval = 1500

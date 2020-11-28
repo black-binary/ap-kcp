@@ -9,7 +9,6 @@ use std::{
 
 use bytes::{Buf, Bytes};
 use futures::{ready, AsyncRead, AsyncWrite, Future};
-use futures_timer::Delay;
 use smol::{
     channel::{bounded, Receiver, Sender},
     future::FutureExt,
@@ -198,7 +197,11 @@ impl<IO: KcpIo + Send + Sync + 'static> KcpHandle<IO> {
     pub async fn connect(&self) -> KcpResult<KcpStream> {
         let stream_id = self.find_new_stream_id().await?;
         let (tx, rx) = bounded(1);
-        let core = Arc::new(Mutex::new(KcpCore::new(stream_id, self.config.clone(), tx)));
+        let core = Arc::new(Mutex::new(KcpCore::new(
+            stream_id,
+            self.config.clone(),
+            tx,
+        )?));
         let stream = KcpStream {
             core: core.clone(),
             read_buffer: None,
@@ -258,7 +261,7 @@ impl<IO: KcpIo + Send + Sync + 'static> KcpHandle<IO> {
                 let mut core = core.lock().await;
                 if let Err(e) = core.flush(&*io).await {
                     if let KcpError::Shutdown(ref s) = e {
-                        log::warn!("kcp core shutting down {}", s);
+                        log::warn!("kcp core is shutting down: {}", s);
                         let _ = dead_tx.send(core.get_stream_id()).await;
                         return Err(e);
                     } else {
@@ -350,8 +353,9 @@ impl<IO: KcpIo + Send + Sync + 'static> KcpHandle<IO> {
                 } else {
                     if new_stream {
                         let (tx, rx) = bounded(1);
-                        let core =
-                            Arc::new(Mutex::new(KcpCore::new(stream_id, config.clone(), tx)));
+                        let core = Arc::new(Mutex::new(
+                            KcpCore::new(stream_id, config.clone(), tx).unwrap(),
+                        ));
                         let update_task = {
                             let core = core.clone();
                             let io = io.clone();
@@ -396,7 +400,9 @@ impl<IO: KcpIo + Send + Sync + 'static> KcpHandle<IO> {
         }
     }
 
-    pub fn new(io: IO, config: KcpConfig) -> Self {
+    pub fn new(io: IO, config: KcpConfig) -> KcpResult<Self> {
+        config.check()?;
+
         let io = Arc::new(io);
         let config = Arc::new(config);
         let sessions = Arc::new(Mutex::new(HashMap::<u16, KcpSession>::new()));
@@ -415,7 +421,7 @@ impl<IO: KcpIo + Send + Sync + 'static> KcpHandle<IO> {
 
         let _clean_task = smol::spawn(Self::clean(sessions.clone(), dead_rx.clone()));
 
-        Self {
+        Ok(Self {
             sessions,
             config,
             accept_rx,
@@ -423,6 +429,6 @@ impl<IO: KcpIo + Send + Sync + 'static> KcpHandle<IO> {
             _feed_packet_task,
             _clean_task,
             dead_tx,
-        }
+        })
     }
 }

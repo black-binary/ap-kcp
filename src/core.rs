@@ -17,6 +17,8 @@ use crate::{
 
 pub const RTO_INIT: u32 = 200;
 pub const SSTHRESH_MIN: u16 = 2;
+pub const MIN_WINDOW_SIZE: u16 = 0x10;
+pub const MAX_WINDOW_SIZE: u16 = 0x8000;
 
 #[async_trait::async_trait]
 pub trait KcpIo {
@@ -42,11 +44,26 @@ fn bound<T: Ord>(lower: T, v: T, upper: T) -> T {
     cmp::min(cmp::max(lower, v), upper)
 }
 
-#[derive(Clone)]
+#[derive(Clone, Eq, PartialEq, Debug)]
 pub enum Congestion {
     None,
     KcpReno,
     LossTolerance,
+}
+
+impl<'de> serde::Deserialize<'de> for Congestion {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let name = String::deserialize(deserializer)?;
+        match name.as_str() {
+            "none" => Ok(Self::None),
+            "reno" => Ok(Self::KcpReno),
+            "loss_tolerance" => Ok(Self::LossTolerance),
+            _ => Ok(Self::LossTolerance),
+        }
+    }
 }
 
 bitflags! {
@@ -58,7 +75,7 @@ bitflags! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde_derive::Deserialize, Debug)]
 pub struct KcpConfig {
     pub max_interval: u32,
     pub min_interval: u32,
@@ -95,6 +112,63 @@ impl Default for KcpConfig {
             keep_alive_interval: 1500,
         }
     }
+}
+
+impl KcpConfig {
+    pub fn check(&self) -> KcpResult<()> {
+        if self.min_interval > self.max_interval {
+            return Err(KcpError::InvalidConfig(
+                "min_interval > max_interval".to_string(),
+            ));
+        }
+        if self.min_interval < 10 || self.min_interval >= 1000 {
+            return Err(KcpError::InvalidConfig(
+                "min_interval should be in range (10, 1000)".to_string(),
+            ));
+        }
+        if self.send_window_size < MIN_WINDOW_SIZE || self.send_window_size > MAX_WINDOW_SIZE {
+            return Err(KcpError::InvalidConfig(format!(
+                "send_window_size should be in range ({}, {})",
+                MIN_WINDOW_SIZE, MAX_WINDOW_SIZE
+            )));
+        }
+        if self.recv_window_size < MIN_WINDOW_SIZE || self.recv_window_size > MAX_WINDOW_SIZE {
+            return Err(KcpError::InvalidConfig(format!(
+                "recv_window_size should be in range ({}, {})",
+                MIN_WINDOW_SIZE, MAX_WINDOW_SIZE
+            )));
+        }
+        if self.mss > self.mtu - HEADER_SIZE {
+            return Err(KcpError::InvalidConfig(
+                "mss > mtu - HEADER_SIZE".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn deserialize() {
+    let s = r#"
+    max_interval = 10
+    min_interval = 100
+    nodelay = false
+    mtu = 1350
+    mss = 1331
+    fast_rexmit_thresh = 3
+    fast_ack_thresh = 32
+    congestion = "loss_tolerance"
+    max_rexmit_time = 32
+    min_rto = 20
+    send_window_size = 0x800
+    recv_window_size = 0x800
+    timeout = 5000
+    keep_alive_interval = 1500
+    "#;
+    let config = toml::from_str::<KcpConfig>(s).unwrap();
+    assert_eq!(config.max_interval, 1234);
+    assert_eq!(config.min_interval, 5678);
+    assert_eq!(config.congestion, Congestion::None);
 }
 
 struct SendingKcpSegment {
@@ -782,7 +856,7 @@ impl KcpCore {
                     log::trace!("loss = {}", loss_rate);
                 }
                 self.congestion_window_size = bound(
-                    16,
+                    MIN_WINDOW_SIZE,
                     self.congestion_window_size,
                     self.config.send_window_size,
                 );
@@ -809,9 +883,14 @@ impl KcpCore {
         interval
     }
 
-    pub fn new(stream_id: u16, config: Arc<KcpConfig>, flush_notify_tx: Sender<()>) -> Self {
+    pub fn new(
+        stream_id: u16,
+        config: Arc<KcpConfig>,
+        flush_notify_tx: Sender<()>,
+    ) -> KcpResult<Self> {
+        config.check()?;
         let now = now_millis();
-        KcpCore {
+        Ok(KcpCore {
             stream_id,
             config: config.clone(),
             send_queue: VecDeque::with_capacity(config.send_window_size as usize),
@@ -823,8 +902,8 @@ impl KcpCore {
             send_next: 0,
             recv_next: 0,
 
-            remote_window_size: 16,
-            congestion_window_size: 16,
+            remote_window_size: MIN_WINDOW_SIZE,
+            congestion_window_size: MIN_WINDOW_SIZE,
             congestion_window_bytes: config.mss,
             slow_start_thresh: SSTHRESH_MIN,
 
@@ -846,6 +925,6 @@ impl KcpCore {
             close_waker: None,
 
             last_active: now,
-        }
+        })
     }
 }
