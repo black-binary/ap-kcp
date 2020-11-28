@@ -58,9 +58,9 @@ impl UdpListener {
             let mut sessions = HashMap::<String, Sender<Bytes>>::new();
             let udp = udp.clone();
             smol::spawn(async move {
+                let mut buf = Vec::new();
+                buf.resize(0x1000, 0u8);
                 loop {
-                    let mut buf = Vec::new();
-                    buf.resize(0x1000, 0u8);
                     let (size, addr) = udp.recv_from(&mut buf).await?;
                     let payload = Bytes::copy_from_slice(&buf[..size]);
                     if let Some(tx) = sessions.get(&addr.to_string()) {

@@ -103,31 +103,36 @@ AP-KCP 本身与底层协议实现无关。如果你需要在自己的协议上�
 ```rust
 #[async_trait::async_trait]
 pub trait KcpIo {
-    async fn send_packet(&self, buf: &[u8]) -> std::io::Result<()>;
-    async fn recv_packet(&self, buf: &mut [u8]) -> std::io::Result<usize>;
+    async fn send_packet(&self, buf: &mut Vec<u8>) -> std::io::Result<()>;
+    async fn recv_packet(&self, buf: &mut Vec<u8>) -> std::io::Result<()>;
 }
 ```
+
+buf 需要可变的原因，是使下层对包进行操作时实现零内存分配。AP-KCP 将假定调用 send_packet 后 buf 内容无意义并立即清空。
 
 下面是一个示例，为 smol::net::UdpSocket 实现了 KcpIo。
 
 ```rust
-#[async_trait::async_trait]
-impl KcpIo for smol::net::UdpSocket {
-    async fn send_packet(&self, buf: &[u8]) -> std::io::Result<()> {
-        self.send(buf).await?;
-        Ok(())
-    }
+    #[async_trait::async_trait]
+    impl KcpIo for smol::net::UdpSocket {
+        async fn send_packet(&self, buf: &mut Vec<u8>) -> std::io::Result<()> {
+            self.send(buf).await?;
+            Ok(())
+        }
 
-    async fn recv_packet(&self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let size = self.recv(buf).await?;
-        Ok(size)
+        async fn recv_packet(&self, buf: &mut Vec<u8>) -> std::io::Result<()> {
+            let size = self.recv(buf).await?;
+            buf.truncate(size);
+            Ok(())
+        }
     }
-}
 ```
 
 之后便可使用 UdpSocket 建立 AP-KCP 会话。
 
 ```rust
+let udp = UdpSocket::bind("0.0.0.0:10000").await.unwrap();
+udp.connect("233.233.233.233:20000").await.unwrap();
 let kcp_handle = KcpHandle::new(udp, KcpConfig::default())?;
 let mut stream1 = kcp_handle.connect().await.unwrap();
 let mut stream2 = kcp_handle.connect().await.unwrap();
