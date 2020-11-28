@@ -6,6 +6,7 @@ pub mod crypto;
 
 pub mod error;
 mod segment;
+pub mod udp;
 
 pub use crate::async_kcp::KcpHandle;
 pub use crate::async_kcp::KcpStream;
@@ -14,22 +15,6 @@ pub use crate::core::KcpConfig;
 pub use crate::core::KcpIo;
 
 pub use async_trait::async_trait;
-
-pub mod prelude {
-    #[async_trait::async_trait]
-    impl crate::KcpIo for smol::net::UdpSocket {
-        async fn send_packet(&self, buf: &mut Vec<u8>) -> std::io::Result<()> {
-            self.send(buf).await?;
-            Ok(())
-        }
-
-        async fn recv_packet(&self, buf: &mut Vec<u8>) -> std::io::Result<()> {
-            let size = self.recv(buf).await?;
-            buf.truncate(size);
-            Ok(())
-        }
-    }
-}
 
 #[cfg(test)]
 pub mod test {

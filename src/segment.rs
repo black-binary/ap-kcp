@@ -2,10 +2,10 @@ use bytes::{Buf, BufMut, Bytes};
 
 use crate::error::{KcpError, KcpResult};
 
-pub const HEADER_SIZE: usize = 2 + 1 + 2 + 4 + 4 + 4 + 2;
-pub const CMD_PUSH: u8 = 1;
-pub const CMD_ACK: u8 = 2;
-pub const CMD_PING: u8 = 3;
+pub(crate) const HEADER_SIZE: usize = 2 + 1 + 2 + 4 + 4 + 4 + 2;
+pub(crate) const CMD_PUSH: u8 = 1;
+pub(crate) const CMD_ACK: u8 = 2;
+pub(crate) const CMD_PING: u8 = 3;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct KcpSegment {

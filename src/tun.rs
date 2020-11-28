@@ -19,6 +19,7 @@ mod core;
 mod crypto;
 mod error;
 mod segment;
+mod udp;
 
 use crate::{
     async_kcp::KcpHandle,
@@ -26,20 +27,6 @@ use crate::{
     crypto::{AeadCrypto, Crypto, CryptoLayer},
     error::KcpResult,
 };
-
-#[async_trait::async_trait]
-impl KcpIo for smol::net::UdpSocket {
-    async fn send_packet(&self, buf: &mut Vec<u8>) -> std::io::Result<()> {
-        self.send(buf).await?;
-        Ok(())
-    }
-
-    async fn recv_packet(&self, buf: &mut Vec<u8>) -> std::io::Result<()> {
-        let size = self.recv(buf).await?;
-        buf.truncate(size);
-        Ok(())
-    }
-}
 
 struct UdpListener {
     accept_rx: Receiver<UdpSession>,
@@ -127,7 +114,7 @@ async fn relay<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
     writer: &mut W,
 ) -> std::io::Result<()> {
     let mut buf = Vec::new();
-    buf.resize(0x1000, 0u8);
+    buf.resize(0x2000, 0u8);
     loop {
         let len = reader.read(&mut buf).await?;
         if len == 0 {

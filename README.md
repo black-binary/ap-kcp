@@ -74,9 +74,9 @@ pub trait KcpIo {
 }
 ```
 
-buf 需要可变的原因，是使下层对包进行操作时实现零内存分配。AP-KCP 将假定调用 send_packet 后 buf 内容无意义并立即清空。
+buf 需要可变的原因，是使下层对包进行操作时实现零内存分配。AP-KCP 将假定调用 `send_packet` 后 buf 内容无意义并立即清空。
 
-下面是一个示例，为 smol::net::UdpSocket 实现了 KcpIo。
+下面是一个示例，为 `smol::net::UdpSocket` 实现了 `KcpIo`。
 
 ```rust
     #[async_trait::async_trait]
@@ -168,7 +168,7 @@ AP-KCP 与 KCP 一样，基于不可靠包传输建立可靠流式传输，保�
 
 * 优化的首部大小
 
-    AP-KCP 通过减少`stream_len`，`len`等字段的长度的方式（因为现实中没有人会同时建立42亿个连接，或者发送单个长度为4GB的数据包），压缩原版的24字节首部至19字节。
+    AP-KCP 通过减少`stream_id`，`len`等字段的长度的方式（因为现实中没有人会同时建立42亿个连接，或者发送单个长度为4GB的数据包），压缩原版的24字节首部至19字节。
 
 * 改进的 ACK 包结构
 
