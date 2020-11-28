@@ -3,6 +3,8 @@ name = "ap_kcp"
 version = "0.1.0"
 authors = ["black-binary <blackbinary@qq.com>"]
 edition = "2018"
+license = "MIT"
+description = "AP-KCP Library"
 
 [dependencies]
 bytes = "0.6"

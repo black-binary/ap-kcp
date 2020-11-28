@@ -62,6 +62,7 @@ impl UdpListener {
                         };
                         accept_tx.send(session).await.unwrap();
                         tx.send(payload).await.unwrap();
+                        log::info!("cleaning dead session...");
                         sessions.retain(|_, tx| !tx.is_closed());
                     }
                 }
@@ -314,7 +315,7 @@ fn main() {
         let aead = AeadCrypto::new(password.as_bytes(), get_algorithm(algorithm_name));
 
         if matches.is_present("client") {
-            log::info!("ap-kcp client");
+            log::info!("ap-kcp-tun client");
             log::info!("listening on {}, tunneling via {}", local, remote);
             log::info!("algorithm: {}", algorithm_name);
             log::info!("settings: {:?}", config);
@@ -322,7 +323,7 @@ fn main() {
             udp.connect(remote).await.unwrap();
             client(local.to_string(), aead, udp, config).await.unwrap();
         } else if matches.is_present("server") {
-            log::info!("ap-kcp server");
+            log::info!("ap-kcp-tun server");
             log::info!("listening on {}, tunneling to {}", local, remote);
             log::info!("algorithm: {}", algorithm_name);
             log::info!("settings: {:?}", config);
