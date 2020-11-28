@@ -28,6 +28,8 @@ AP-KCP 本身是一个异步库，可以被用于在任何不可靠的基于封�
 
 ## 使用
 
+### AP-KCP-TUN（作为可执行二进制程序使用）
+
 AP-KCP 的二进制发行版本是一个基于 UDP 的加密隧道。
 
 假设
@@ -43,13 +45,13 @@ AP-KCP 的二进制发行版本是一个基于 UDP 的加密隧道。
 客户端
 
 ```shell
-./ap-kcp --client --password mypassword --local 127.0.0.1:3000 --remote 233.233.233.233:4000
+ap-kcp-tun --client --password mypassword --local 127.0.0.1:3000 --remote 233.233.233.233:4000
 ```
 
 服务端
 
 ```shell
-./ap-kcp --server --password mypassword --local 0.0.0.0:4000 --remote 1.1.1.1:5000
+ap-kcp-tun --server --password mypassword --local 0.0.0.0:4000 --remote 1.1.1.1:5000
 ```
 
 你可以使用 --kcp-config 指定详细传输参数的配置文件（默认参数配置文件参见目录下 default-config.toml），使用 --algorithm 指定加密方式，支持下面三种 AEAD 加密方式：
@@ -60,43 +62,7 @@ AP-KCP 的二进制发行版本是一个基于 UDP 的加密隧道。
 
 * chacha20-poly1305
 
-## 编译
-
-编译需要使用 rust 工具链。
-
-```shell
-git clone https://github.com/black-binary/ap-kcp.git
-cd ap-kcp
-make
-```
-
-如果你需要静态链接，可以换用 `x86_64-unknown-linux-musl` 或者其他 musl 工具链
-
-```shell
-make x86_64-unknown-linux-musl
-```
-
-然后去喝一杯咖啡。
-
-## 细节
-
-### 规格
-
-AP-KCP 封包结构
-| 2字节          | 1字节        | 2字节                             | 4字节             | 4字节          | 4 字节                     | 2字节          | len 字节  |
-| -------------- | ------------ | --------------------------------- | ----------------- | -------------- | -------------------------- | -------------- | --------- |
-| 流ID stream_id | 指令 command | 可用接收窗口大小 recv_window_size | 时间戳　timestamp | 包序号sequence | 接收窗口起始序号 recv_next | 包数据长度 len | 数据 data |
-
-加密封包结构
-
-|                        | n 字节           | 16 字节  | 12字节           |
-| ---------------------- | ---------------- | -------- | ---------------- |
-| 明文封包(n 字节)       | 明文(AP-KCP封包) | 无此字段 | 无此字段         |
-| 密文封包(n+16+12 字节) | 密文             | 标签 tag | 一次性密钥 nonce |
-
-无论 AP-KCP 包是否相同，每一次发送均重新生成一次 nonce 并重新加密。
-
-### 作为库使用
+### AP-KCP（作为库使用）
 
 AP-KCP 本身与底层协议实现无关。如果你需要在自己的协议上使用 AP-KCP，在 Cargo.toml 中添加依赖后，实现下面的 KcpIo trait 即可直接使用。
 
@@ -148,6 +114,44 @@ stream3.read(buf).await.unwrap();
 
 对 `KcpStream` 的 drop 将使其优雅停机（四次挥手，等待超时），但仍然建议使用 `close()` 方法显式地关闭流。
 
+## 编译
+
+编译需要使用 rust 工具链。
+
+```shell
+git clone https://github.com/black-binary/ap-kcp.git
+cd ap-kcp
+make
+```
+
+如果你需要静态链接，可以换用 `x86_64-unknown-linux-musl` 或者其他 musl 工具链
+
+```shell
+make x86_64-unknown-linux-musl
+```
+
+然后去喝一杯咖啡。
+
+## 细节
+
+### 规格
+
+AP-KCP 封包结构
+| 2字节          | 1字节        | 2字节                             | 4字节             | 4字节          | 4 字节                     | 2字节          | len 字节  |
+| -------------- | ------------ | --------------------------------- | ----------------- | -------------- | -------------------------- | -------------- | --------- |
+| 流ID stream_id | 指令 command | 可用接收窗口大小 recv_window_size | 时间戳　timestamp | 包序号sequence | 接收窗口起始序号 recv_next | 包数据长度 len | 数据 data |
+
+加密封包结构
+
+|                        | n 字节           | 16 字节  | 12字节           |
+| ---------------------- | ---------------- | -------- | ---------------- |
+| 明文封包(n 字节)       | 明文(AP-KCP封包) | 无此字段 | 无此字段         |
+| 密文封包(n+16+12 字节) | 密文             | 标签 tag | 一次性密钥 nonce |
+
+无论 AP-KCP 包是否相同，每一次发送均重新生成一次 nonce 并重新加密。
+
+加解密操作均为原地(in-place)，全程零内存分配。
+
 ### 特点
 
 AP-KCP 与 KCP 一样，基于不可靠包传输建立可靠流式传输，保留了 KCP 的优化策略：
@@ -164,7 +168,7 @@ AP-KCP 与 KCP 一样，基于不可靠包传输建立可靠流式传输，保�
 
 * 优化的首部大小
 
-    AP-KCP 通过减少`conv`，`len`等字段的长度的方式（因为现实中没有人会同时建立42亿个连接，或者发送单个长度为4GB的数据包），压缩原版的24字节首部至19字节。
+    AP-KCP 通过减少`stream_len`，`len`等字段的长度的方式（因为现实中没有人会同时建立42亿个连接，或者发送单个长度为4GB的数据包），压缩原版的24字节首部至19字节。
 
 * 改进的 ACK 包结构
 
@@ -198,7 +202,7 @@ AP-KCP 与 KCP 一样，基于不可靠包传输建立可靠流式传输，保�
 
 * 密码学支持
 
-    基于`ring`提供了下面几种 AEAD 密码支持：
+    基于 `ring` 提供了下面几种 AEAD 密码支持：
 
     * aes-256-gcm
 
