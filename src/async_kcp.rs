@@ -14,7 +14,7 @@ use smol::{
     channel::{bounded, Receiver, Sender},
     future::FutureExt,
     lock::{Mutex, MutexGuardArc},
-    Task,
+    Task, Timer,
 };
 
 use crate::{
@@ -37,7 +37,9 @@ pub struct KcpStream {
 impl Drop for KcpStream {
     fn drop(&mut self) {
         smol::block_on(async {
-            let _ = self.core.lock().await.try_close();
+            if let Err(e) = self.core.lock().await.try_close() {
+                log::trace!("try_close failed {}", e);
+            }
         });
         log::trace!("kcp stream dropped");
     }
@@ -255,21 +257,26 @@ impl<IO: KcpIo + Send + Sync + 'static> KcpHandle<IO> {
             let interval = {
                 let mut core = core.lock().await;
                 if let Err(e) = core.flush(&*io).await {
-                    log::error!("flush error: {}", e);
-                    let _ = dead_tx.send(core.get_stream_id()).await;
-                    return Err(KcpError::Shutdown(
-                        "update task is shutting down".to_string(),
-                    ));
+                    if let KcpError::Shutdown(ref s) = e {
+                        log::warn!("kcp core shutting down {}", s);
+                        let _ = dead_tx.send(core.get_stream_id()).await;
+                        return Err(e);
+                    } else {
+                        log::error!("flush error: {}, retrying..", e);
+                        // Sleep and continue
+                        let r = rand::random::<u32>() % core.config.max_interval;
+                        core.config.max_interval + r
+                    }
+                } else {
+                    core.get_interval()
                 }
-                core.get_interval()
             };
-            let delay = Delay::new(Duration::from_millis(interval as u64));
             let notify = async {
                 let _ = flush_notify_rx.recv().await;
                 log::trace!("wake up now!");
             };
             let tick = async move {
-                delay.await;
+                Timer::after(Duration::from_millis(interval as u64)).await;
             };
 
             notify.race(tick).await;
@@ -286,7 +293,13 @@ impl<IO: KcpIo + Send + Sync + 'static> KcpHandle<IO> {
         let mut buf = Vec::new();
         buf.resize(2 * config.mtu, 0);
         loop {
-            let size = io.recv_packet(&mut buf).await?;
+            let size = match io.recv_packet(&mut buf).await {
+                Ok(size) => size,
+                Err(e) => {
+                    log::error!("recv error: {}", e);
+                    return Err(KcpError::IoError(e));
+                }
+            };
             if size < HEADER_SIZE {
                 log::error!("short packet length {}", size);
                 continue;
@@ -376,9 +389,9 @@ impl<IO: KcpIo + Send + Sync + 'static> KcpHandle<IO> {
                 };
             }
 
-            if core.lock().await.input(segments).is_err() {
+            if let Err(e) = core.lock().await.input(segments) {
                 sessions.lock().await.remove(&stream_id);
-                log::trace!("removing dead link")
+                log::trace!("removing dead link {}", e);
             };
         }
     }

@@ -282,7 +282,7 @@ pub mod test {
             assert_eq!(kcp1.get_stream_count().await, 1);
             drop(stream1);
             Timer::after(Duration::from_millis(
-                KcpConfig::default().timeout as u64 + 1000,
+                1000 + KcpConfig::default().timeout as u64,
             ))
             .await;
             assert_eq!(kcp1.get_stream_count().await, 0);

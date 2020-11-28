@@ -148,6 +148,7 @@ pub(crate) struct KcpCore {
 
 impl Drop for KcpCore {
     fn drop(&mut self) {
+        log::trace!("kcp core dropped");
         self.force_close();
     }
 }
@@ -505,9 +506,11 @@ impl KcpCore {
     }
 
     pub fn try_close(&mut self) -> KcpResult<()> {
+        self.now = now_millis();
         if self.close_state.contains(CloseFlags::TX_CLOSING) {
             Err(KcpError::Shutdown("kcp core is shutting down".to_string()))
         } else {
+            log::trace!("trying to close kcp core..");
             self.close_state.set(CloseFlags::TX_CLOSING, true);
             self.send_queue.push_back(BytesMut::new());
             Ok(())
@@ -515,6 +518,7 @@ impl KcpCore {
     }
 
     pub fn poll_close(&mut self, cx: &Context) -> Poll<KcpResult<()>> {
+        self.now = now_millis();
         if !self.close_state.contains(CloseFlags::TX_CLOSING) {
             self.close_state.set(CloseFlags::TX_CLOSING, true);
             // Empty payload
