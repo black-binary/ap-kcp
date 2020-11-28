@@ -1,6 +1,6 @@
 # AP-KCP
 
-Armor-Piercing KCP (装甲穿透KCP)
+Armor-Piercing KCP (装甲穿透KCP/破甲KCP)
 
 基于KCP修改和优化，用于穿透恶劣网络环境的高性能可靠传输协议(ARQ)。使用 Rust 实现。拥有基于 ring 的密码学支持，和基于 smol 的异步运行时。
 
@@ -10,11 +10,11 @@ Armor-Piercing KCP (装甲穿透KCP)
 
 ![speedtest](speedtest.png)
 
-**警告：AP-KCP可能会以侵占其他用户的带宽为代价换取更好的网络吞吐效率，请勿进行大规模部署和使用，否则可能导致大范围的网络拥塞甚至瘫痪。**
+**警告：AP-KCP可能会以侵占其他用户的带宽为代价换取使用者更好的网络吞吐效率，请勿进行大规模部署和使用，否则可能导致大范围的网络拥塞甚至瘫痪。**
 
 ## 概览
 
-AP-KCP 与 KCP 一样，基于不可靠包传输建立可靠流式传输。它与下层协议实现无关，只需保证下层是基于封包的传输即可，即包不会被切分或合并。无需保证传输顺序和传输可靠性，甚至不需要保证每个包的正确性和完整性（误码和篡改均会被纠正）。例如 UDP 和 ICMP 都可用作底层传输。
+AP-KCP 与 KCP 一样，基于不可靠包传输建立可靠流式传输。它与下层协议实现无关，只需保证下层是基于封包的传输即可，即包不会被切分或合并。无需保证传输顺序和传输可靠性，甚至无需保证每个包的正确性和完整性（误码和篡改均会被纠正）。例如 UDP 和 ICMP 都可用作底层传输。
 
 AP-KCP 与 KCP 有几点主要区别：
 
@@ -52,7 +52,33 @@ AP-KCP 的二进制发行版本是一个基于 UDP 的加密隧道。
 ./ap-kcp --server --password mypassword --local 0.0.0.0:4000 --remote 1.1.1.1:5000
 ```
 
+你可以使用 --kcp-config 指定详细传输参数的配置文件（默认参数配置文件参见目录下 default-config.toml），使用 --algorithm 指定加密方式，支持下面三种 AEAD 加密方式：
+
+* aes-256-gcm
+
+* aes-128-gcm
+
+* chacha20-poly1305
+
 ## 细节
+
+### 规格
+
+AP-KCP 封包结构
+| 2字节          | 1字节        | 2字节                             | 4字节             | 4字节          | 4 字节                     | 2字节          | len 字节  |
+| -------------- | ------------ | --------------------------------- | ----------------- | -------------- | -------------------------- | -------------- | --------- |
+| 流ID stream_id | 指令 command | 可用接收窗口大小 recv_window_size | 时间戳　timestamp | 包序号sequence | 接收窗口起始序号 recv_next | 包数据长度 len | 数据 data |
+
+加密封包结构
+
+|                        | n 字节           | 16 字节  | 12字节           |
+| ---------------------- | ---------------- | -------- | ---------------- |
+| 明文封包(n 字节)       | 明文(AP-KCP封包) | 无此字段 | 无此字段         |
+| 密文封包(n+16+12 字节) | 密文             | 标签 tag | 一次性密钥 nonce |
+
+无论 AP-KCP 包是否相同，每一次发送均重新生成一次 nonce 并重新加密。
+
+### 作为库使用
 
 AP-KCP 本身与底层协议实现无关。如果你需要在自己的协议上使用 AP-KCP，在 Cargo.toml 中添加依赖后，实现下面的 KcpIo trait 即可直接使用。
 
@@ -63,6 +89,43 @@ pub trait KcpIo {
     async fn recv_packet(&self, buf: &mut [u8]) -> std::io::Result<usize>;
 }
 ```
+
+下面是一个示例，为 smol::net::UdpSocket 实现了 KcpIo。
+
+```rust
+#[async_trait::async_trait]
+impl KcpIo for smol::net::UdpSocket {
+    async fn send_packet(&self, buf: &[u8]) -> std::io::Result<()> {
+        self.send(buf).await?;
+        Ok(())
+    }
+
+    async fn recv_packet(&self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let size = self.recv(buf).await?;
+        Ok(size)
+    }
+}
+```
+
+之后便可使用 UdpSocket 建立 AP-KCP 会话。
+
+```rust
+let kcp_handle = KcpHandle::new(udp, KcpConfig::default())?;
+let mut stream1 = kcp_handle.connect().await.unwrap();
+let mut stream2 = kcp_handle.connect().await.unwrap();
+let mut stream3 = kcp_handle.accept().await.unwrap();
+stream1.read(buf).await.unwrap();
+stream2.write(buf).await.unwrap();
+stream3.read(buf).await.unwrap();
+```
+
+同一个 `KcpHandle` 可以建立多个传输流，使用 `connect()` 向远端发起连接，或使用 `accept()` 从远端接受连接。`KcpStream` 实现了 `AsyncRead` 和 `AsyncWrite`, 可以与其他异步传输流一样使用 `read()` `write()` 读写。
+
+`KcpHandle` 一旦 drop 将释放所有资源，并将其上建立的所有传输流全部强行关闭（不再收发任何包），请确保使用 `KcpStream` 时 `KcpHandle` 在作用域内。
+
+对 `KcpStream` 的 drop 将使其优雅停机（四次挥手，等待超时），但仍然建议使用 `close()` 方法显式地关闭流。
+
+### 特点
 
 AP-KCP 与 KCP 一样，基于不可靠包传输建立可靠流式传输，保留了 KCP 的优化策略：
 
@@ -86,7 +149,7 @@ AP-KCP 与 KCP 一样，基于不可靠包传输建立可靠流式传输，保�
 
 * 封包粘连
 
-    无论何时，发送的封包如果过短，则会粘连在同一个底层封包中发送（同一个 UDP 包，包含多个 KCP 包）。
+    无论何时，发送的封包如果过短，则会尝试与其他封包粘连在同一个底层封包中发送（同一个 UDP 包，包含多个 KCP 包）。
 
 * 快速应答
 
@@ -108,7 +171,7 @@ AP-KCP 与 KCP 一样，基于不可靠包传输建立可靠流式传输，保�
 
 * 激进的拥塞控制策略（仍有优化空间）
   
-    AP-KCP 基于丢包计算发送窗口，若丢包率不超过一定值则以指数增加发送窗口，否则减少。因此发送窗口将容忍一定的丢包率并维持在较高水平。
+    AP-KCP 基于丢包计算发送窗口，若丢包率不超过一定值则以指数增加发送窗口，否则减少。因此发送窗口将容忍一定的丢包率并维持窗口大小在较高水平。
 
 * 密码学支持
 
@@ -126,7 +189,7 @@ AP-KCP 与 KCP 一样，基于不可靠包传输建立可靠流式传输，保�
 
 * 高效异步 IO
 
-    使用 Rust 和 smol，更高的并发效率和计算效率，同时兼顾稳定和安全性。默认情况下，会根据 CPU 数量启用对应的线程数量，并由异步执行器调度各协程执行异步操作。
+    使用 Rust 和 smol，拥有更高的并发效率和计算效率，同时兼顾稳定和安全性。默认情况下，会根据 CPU 数量启用对应的线程数量，并由异步执行器调度各协程执行异步操作。
 
 ## 其他
 
