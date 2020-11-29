@@ -6,9 +6,7 @@ use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use log::LevelFilter;
 use ring::aead;
 use smol::{
-    channel::bounded,
-    channel::Receiver,
-    channel::Sender,
+    channel::{bounded, Receiver, Sender},
     future::FutureExt,
     net::{TcpListener, TcpStream, UdpSocket},
     Task,
@@ -44,16 +42,27 @@ impl UdpListener {
         let _task = {
             let mut sessions = HashMap::<String, Sender<Bytes>>::new();
             let udp = udp.clone();
+            let mut jammed_counter = 0;
             smol::spawn(async move {
                 let mut buf = Vec::new();
                 buf.resize(0x1000, 0u8);
                 loop {
                     let (size, addr) = udp.recv_from(&mut buf).await?;
                     let payload = Bytes::copy_from_slice(&buf[..size]);
+                    let mut should_clean = false;
                     if let Some(tx) = sessions.get(&addr.to_string()) {
-                        tx.send(payload).await.unwrap();
+                        if tx.is_closed() {
+                            should_clean = true;
+                        } else if tx.try_send(payload).is_err() {
+                            log::debug!("the channel got jammed!");
+                            jammed_counter += 1;
+                            if jammed_counter > 1000 {
+                                jammed_counter = 0;
+                                log::debug!("high load detected");
+                            }
+                        }
                     } else {
-                        let (tx, rx) = bounded(0x100);
+                        let (tx, rx) = bounded(0x200);
                         sessions.insert(addr.to_string(), tx.clone());
                         let session = UdpSession {
                             udp: udp.clone(),
@@ -62,6 +71,9 @@ impl UdpListener {
                         };
                         accept_tx.send(session).await.unwrap();
                         tx.send(payload).await.unwrap();
+                        should_clean = true;
+                    }
+                    if should_clean {
                         log::info!("cleaning dead session...");
                         sessions.retain(|_, tx| !tx.is_closed());
                     }
@@ -102,8 +114,7 @@ impl core::KcpIo for UdpSession {
                 log::error!("long packet");
                 continue;
             }
-            let len = payload.len();
-            buf.resize(len, 0);
+            buf.truncate(payload.len());
             buf.copy_from_slice(&payload);
             return Ok(());
         }
@@ -174,14 +185,13 @@ async fn server<C: Crypto + 'static>(
         let udp_session = listener.accept().await;
         log::trace!("udp session accepted: {}", udp_session.remote);
         let udp_session = CryptoLayer::wrap(udp_session, crypto.clone());
-        let kcp = Arc::new(KcpHandle::new(udp_session, config.clone()).unwrap());
+        let kcp_handle = Arc::new(KcpHandle::new(udp_session, config.clone()).unwrap());
         let t: Task<KcpResult<()>> = {
             let addr = addr.clone();
-            let kcp = kcp.clone();
+            let kcp_handle = kcp_handle.clone();
             smol::spawn(async move {
-                let mut relay_task = Vec::new();
                 loop {
-                    let kcp_stream = kcp.accept().await?;
+                    let kcp_stream = kcp_handle.accept().await?;
                     log::info!("kcp tunnel established");
                     let tcp_stream = TcpStream::connect(addr.clone()).await?;
                     log::info!("tunneling to {}", addr);
@@ -193,12 +203,12 @@ async fn server<C: Crypto + 'static>(
                         let t2 = relay(&mut kcp_reader, &mut tcp_writer);
                         let _ = t1.race(t2).await;
                         let mut kcp_stream = kcp_reader.reunite(kcp_writer).unwrap();
-                        kcp_stream.close().await?;
                         tcp_writer.close().await?;
+                        kcp_stream.close().await?;
                         log::info!("server-side tunnel closed");
                         Ok(())
                     });
-                    relay_task.push(t);
+                    t.detach();
                 }
             })
         };
@@ -213,7 +223,7 @@ async fn server<C: Crypto + 'static>(
             }
             ok
         });
-        sessions.push((kcp, t));
+        sessions.push((kcp_handle, t));
     }
 }
 
@@ -339,16 +349,17 @@ fn main() {
 fn simple_iperf() {
     std::env::set_var("SMOL_THREADS", "8");
     let _ = env_logger::builder()
-        .filter_module("ap_kcp", LevelFilter::Info)
+        .filter_module("ap_kcp", LevelFilter::Debug)
         .try_init();
     let password = "password";
     let t1 = smol::spawn(async move {
-        let local = "127.0.0.1:5000";
+        let local = "0.0.0.0:5000";
         let remote = "127.0.0.1:6000";
         let udp = UdpSocket::bind(":::0").await.unwrap();
         udp.connect(remote).await.unwrap();
         let aead = AeadCrypto::new(password.as_bytes(), &aead::AES_256_GCM);
-        let config = KcpConfig::default();
+        let mut config = KcpConfig::default();
+        config.name = String::from("client");
         client(local.to_string(), aead, udp, config).await.unwrap();
     });
 
@@ -357,7 +368,8 @@ fn simple_iperf() {
         let remote = "127.0.0.1:5201";
         let udp = UdpSocket::bind(local).await.unwrap();
         let aead = AeadCrypto::new(password.as_bytes(), &aead::AES_256_GCM);
-        let config = KcpConfig::default();
+        let mut config = KcpConfig::default();
+        config.name = String::from("server");
         server(remote.to_string(), udp, aead, config).await.unwrap();
     });
     smol::block_on(async {

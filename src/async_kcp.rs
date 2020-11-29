@@ -246,7 +246,7 @@ impl<IO: KcpIo + Send + Sync + 'static> KcpHandle<IO> {
                 .await
                 .map_err(|_| KcpError::Shutdown("cleaning but kcp handle is closed".to_string()))?;
             sessions.lock().await.remove(&stream_id);
-            log::trace!("cleaning {}", stream_id);
+            log::debug!("cleaning {}", stream_id);
         }
     }
 
@@ -259,10 +259,13 @@ impl<IO: KcpIo + Send + Sync + 'static> KcpHandle<IO> {
         loop {
             let interval = {
                 let mut core = core.lock().await;
-                if let Err(e) = core.flush(&*io).await {
+                let flush_fut = core.flush(&*io);
+                if let Err(e) = flush_fut.await {
                     if let KcpError::Shutdown(ref s) = e {
+                        let stream_id = core.get_stream_id();
+                        drop(core);
                         log::warn!("kcp core is shutting down: {}", s);
-                        let _ = dead_tx.send(core.get_stream_id()).await;
+                        let _ = dead_tx.send(stream_id).await;
                         return Err(e);
                     } else {
                         log::error!("flush error: {}, retrying..", e);
@@ -276,7 +279,7 @@ impl<IO: KcpIo + Send + Sync + 'static> KcpHandle<IO> {
             };
             let notify = async {
                 let _ = flush_notify_rx.recv().await;
-                log::trace!("wake up now!");
+                log::trace!("updater wake up now!");
             };
             let tick = async move {
                 Timer::after(Duration::from_millis(interval as u64)).await;
@@ -391,8 +394,8 @@ impl<IO: KcpIo + Send + Sync + 'static> KcpHandle<IO> {
             }
 
             if let Err(e) = core.lock().await.input(segments) {
-                sessions.lock().await.remove(&stream_id);
                 log::trace!("removing dead link {}", e);
+                sessions.lock().await.remove(&stream_id);
             };
         }
     }

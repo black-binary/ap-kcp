@@ -93,6 +93,7 @@ pub struct KcpConfig {
     pub recv_window_size: u16,
     pub timeout: u32,
     pub keep_alive_interval: u32,
+    pub name: String,
 }
 
 impl Default for KcpConfig {
@@ -112,6 +113,7 @@ impl Default for KcpConfig {
             recv_window_size: 0x800,
             timeout: 5000,
             keep_alive_interval: 1500,
+            name: "".to_string(),
         }
     }
 }
