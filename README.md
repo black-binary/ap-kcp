@@ -24,7 +24,7 @@ AP-KCP 与 KCP 有几点主要区别：
 
 * AP-KCP 添加了 AEAD 密码学支持，传输的封包均经过加密以消除特征，确保 ISP 无法进行有效检测和 QoS 限制，并保证包的完整性和传输数据安全。
 
-AP-KCP 本身是一个异步库，可以被用于在任何不可靠的基于封包的底层传输上，建立高效的可靠流式传输。AP-KCP 的二进制发布版本是一个隧道程序，基于 UDP 建立了AP-KCP 连接。
+AP-KCP 本身是一个异步库，可以被用于在任何不可靠的基于封包的底层传输上，建立高效的可靠流式传输。AP-KCP 的二进制发布版本是一个隧道程序，基于 UDP 建立了AP-KCP 隧道连接。
 
 ## 使用
 
@@ -74,24 +74,24 @@ pub trait KcpIo {
 }
 ```
 
-buf 需要可变的原因，是使下层对包进行操作时实现零内存分配。AP-KCP 将假定调用 `send_packet` 后 buf 内容无意义并立即清空。
+`buf` 需要可变的原因，是使下层对包进行操作时实现零内存分配。AP-KCP 假定调用 `send_packet` 后 buf 内容无意义并立即清空，假定 `recv_packet` 得到的缓冲区大小即为接收到的包大小。
 
-下面是一个示例，为 `smol::net::UdpSocket` 实现了 `KcpIo`。
+下面是一个示例，它为 `smol::net::UdpSocket` 实现了 `KcpIo` trait。
 
 ```rust
-    #[async_trait::async_trait]
-    impl KcpIo for smol::net::UdpSocket {
-        async fn send_packet(&self, buf: &mut Vec<u8>) -> std::io::Result<()> {
-            self.send(buf).await?;
-            Ok(())
-        }
-
-        async fn recv_packet(&self, buf: &mut Vec<u8>) -> std::io::Result<()> {
-            let size = self.recv(buf).await?;
-            buf.truncate(size);
-            Ok(())
-        }
+#[async_trait::async_trait]
+impl KcpIo for smol::net::UdpSocket {
+    async fn send_packet(&self, buf: &mut Vec<u8>) -> std::io::Result<()> {
+        self.send(buf).await?;
+        Ok(())
     }
+
+    async fn recv_packet(&self, buf: &mut Vec<u8>) -> std::io::Result<()> {
+        let size = self.recv(buf).await?;
+        buf.truncate(size);
+        Ok(())
+    }
+}
 ```
 
 之后便可使用 UdpSocket 建立 AP-KCP 会话。

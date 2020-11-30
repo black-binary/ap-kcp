@@ -109,8 +109,8 @@ impl Default for KcpConfig {
             congestion: Congestion::LossTolerance,
             max_rexmit_time: 32,
             min_rto: 20,
-            send_window_size: 0x800,
-            recv_window_size: 0x800,
+            send_window_size: 0x1000,
+            recv_window_size: 0x1000,
             timeout: 5000,
             keep_alive_interval: 1500,
             name: "".to_string(),
@@ -213,7 +213,7 @@ pub(crate) struct KcpCore {
     ping_ts: u32,
 
     close_state: CloseFlags,
-    close_ts: u32,
+    close_moment: u32,
 
     buffer: Vec<u8>,
 
@@ -227,6 +227,10 @@ pub(crate) struct KcpCore {
     flush_notify_tx: Sender<()>,
 
     last_active: u32,
+
+    push_counter: u32,
+    rexmit_counter: u32,
+    last_measure: u32,
 }
 
 impl Drop for KcpCore {
@@ -699,13 +703,34 @@ impl KcpCore {
     pub async fn flush<IO: KcpIo>(&mut self, io: &IO) -> KcpResult<()> {
         self.now = now_millis();
 
+        if i32diff(self.now, self.last_measure) >= 500 && self.push_counter >= 100 {
+            if let Congestion::LossTolerance = self.config.congestion {
+                let loss_rate = self.rexmit_counter * 100 / self.push_counter;
+                if loss_rate >= 15 {
+                    self.congestion_window_size -= self.congestion_window_size / 4;
+                } else if loss_rate <= 5 {
+                    self.congestion_window_size += self.congestion_window_size / 4;
+                }
+                log::trace!("loss_rate = {}", loss_rate);
+                self.congestion_window_size = bound(
+                    MIN_WINDOW_SIZE,
+                    self.congestion_window_size,
+                    self.config.send_window_size,
+                );
+            }
+
+            self.last_measure = self.now;
+            self.rexmit_counter = 0;
+            self.push_counter = 0;
+        }
+
         // Keep working until the core is fully closed
         if self.close_state.contains(CloseFlags::CLOSED) {
-            if self.close_ts == 0 {
+            if self.close_moment == 0 {
                 // Keep running for a while to ACK
                 let wait = bound(100, self.rto * 2, self.config.timeout);
-                self.close_ts = self.now + wait;
-            } else if i32diff(self.now, self.close_ts) >= 0 {
+                self.close_moment = self.now + wait;
+            } else if i32diff(self.now, self.close_moment) >= 0 {
                 // It's time to shutdown
                 self.force_close();
                 return Err(KcpError::Shutdown("flushing a closed kcp core".to_string()));
@@ -784,6 +809,7 @@ impl KcpCore {
                 // Timeout, rexmit
                 need_send = true;
                 rexmit += 1;
+                self.rexmit_counter += 1;
                 if self.config.nodelay {
                     // ~ 1.5x rto
                     sending_segment.rto += self.rto / 2;
@@ -800,6 +826,7 @@ impl KcpCore {
             }
 
             if need_send {
+                self.push_counter += 1;
                 sending_segment.rexmit_counter += 1;
                 sending_segment.segment.timestamp = self.now;
                 sending_segment.segment.recv_window_size = recv_window_unused;
@@ -823,53 +850,32 @@ impl KcpCore {
             self.buffer.clear();
         }
 
-        match self.config.congestion {
-            Congestion::None => {}
-            Congestion::KcpReno => {
-                let mss = self.config.mss;
-                if fast_rexmit > 0 {
-                    // Some ack packets was skipped
-                    let inflight_packet = (self.send_next - self.send_unack) as u16;
-                    self.slow_start_thresh = cmp::max(inflight_packet / 2, SSTHRESH_MIN);
-                    self.congestion_window_size =
-                        self.slow_start_thresh + self.config.fast_rexmit_thresh as u16;
-                    self.congestion_window_bytes = self.congestion_window_size as usize * mss;
-                    log::trace!(
-                        "fast resent, cwnd = {}, incr = {}",
-                        self.congestion_window_size,
-                        self.congestion_window_bytes
-                    );
-                }
-
-                if rexmit > 0 {
-                    // Packet lost
-                    self.slow_start_thresh =
-                        cmp::max(self.congestion_window_size / 2, SSTHRESH_MIN);
-                    self.congestion_window_size = 1;
-                    self.congestion_window_bytes = mss;
-                    log::trace!(
-                        "packet lost, cwnd = {}, incr = {}",
-                        self.congestion_window_size,
-                        self.congestion_window_bytes
-                    );
-                }
-            }
-            Congestion::LossTolerance => {
-                if self.send_window.len() > 0 {
-                    let loss_rate = rexmit as u32 * 100 / self.send_window.len() as u32;
-                    if loss_rate >= 15 {
-                        self.congestion_window_size -= self.congestion_window_size / 4;
-                    } else if loss_rate <= 5 {
-                        self.congestion_window_size += self.congestion_window_size / 4;
-                    }
-                    log::trace!("loss = {}", loss_rate);
-                }
-                self.congestion_window_size = bound(
-                    MIN_WINDOW_SIZE,
+        if let Congestion::KcpReno = self.config.congestion {
+            let mss = self.config.mss;
+            if fast_rexmit > 0 {
+                // Some ACK packets was skipped
+                let inflight_packet = (self.send_next - self.send_unack) as u16;
+                self.slow_start_thresh = cmp::max(inflight_packet / 2, SSTHRESH_MIN);
+                self.congestion_window_size =
+                    self.slow_start_thresh + self.config.fast_rexmit_thresh as u16;
+                self.congestion_window_bytes = self.congestion_window_size as usize * mss;
+                log::trace!(
+                    "fast resent, cwnd = {}, incr = {}",
                     self.congestion_window_size,
-                    self.config.send_window_size,
+                    self.congestion_window_bytes
                 );
-                log::trace!("cwnd = {}", self.congestion_window_size);
+            }
+
+            if rexmit > 0 {
+                // Packet lost
+                self.slow_start_thresh = cmp::max(self.congestion_window_size / 2, SSTHRESH_MIN);
+                self.congestion_window_size = 1;
+                self.congestion_window_bytes = mss;
+                log::trace!(
+                    "packet lost, cwnd = {}, incr = {}",
+                    self.congestion_window_size,
+                    self.congestion_window_bytes
+                );
             }
         }
 
@@ -911,8 +917,8 @@ impl KcpCore {
             send_next: 0,
             recv_next: 0,
 
-            remote_window_size: MIN_WINDOW_SIZE,
-            congestion_window_size: MIN_WINDOW_SIZE,
+            remote_window_size: config.recv_window_size,
+            congestion_window_size: config.send_window_size,
             congestion_window_bytes: config.mss,
             slow_start_thresh: SSTHRESH_MIN,
 
@@ -930,10 +936,14 @@ impl KcpCore {
             flush_waker: None,
             flush_notify_tx,
             close_state: CloseFlags::empty(),
-            close_ts: 0,
+            close_moment: 0,
             close_waker: None,
 
             last_active: now,
+
+            push_counter: 0,
+            rexmit_counter: 0,
+            last_measure: now,
         })
     }
 }

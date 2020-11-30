@@ -52,13 +52,13 @@ pub mod test {
         smol::spawn(async move {
             let mut stream1 = kcp1.connect().await.unwrap();
             for i in 0..255 {
-                let payload = [i as u8; 100];
+                let payload = [i as u8; 0x1000];
                 stream1.write_all(&payload).await.unwrap();
             }
             stream1.flush().await.unwrap();
             log::debug!("stream1 flushed");
             let mut buf = Vec::new();
-            buf.resize(100, 0u8);
+            buf.resize(0x1000, 0u8);
             for i in 0..255 {
                 stream1.read_exact(&mut buf).await.unwrap();
                 assert_eq!(i as u8, buf[99]);
@@ -70,14 +70,14 @@ pub mod test {
 
         let mut stream2 = kcp2.accept().await.unwrap();
         let mut buf = Vec::new();
-        buf.resize(100, 0u8);
+        buf.resize(0x1000, 0u8);
         for i in 0..255 {
             stream2.read_exact(&mut buf).await.unwrap();
             assert_eq!(i as u8, buf[99]);
         }
         log::debug!("stream2 read");
         for i in 0..255 {
-            let payload = [i as u8; 100];
+            let payload = [i as u8; 0x1000];
             stream2.write_all(&payload).await.unwrap();
         }
         stream2.close().await.unwrap();
@@ -230,9 +230,9 @@ pub mod test {
     fn packet_lost() {
         init();
         smol::block_on(async move {
-            let (io1, io2) = NetworkIoSimulator::new(0.05, 100);
+            let (io1, io2) = NetworkIoSimulator::new(0.3, 100);
             send_recv(io1, io2).await;
-            let (io1, io2) = NetworkIoSimulator::new(0.05, 100);
+            let (io1, io2) = NetworkIoSimulator::new(0.3, 100);
             concurrent_send_recv(io1, io2).await;
         });
     }
@@ -241,9 +241,9 @@ pub mod test {
     fn horrible() {
         init();
         smol::block_on(async move {
-            let (io1, io2) = NetworkIoSimulator::new(0.1, 500);
+            let (io1, io2) = NetworkIoSimulator::new(0.3, 500);
             send_recv(io1, io2).await;
-            let (io1, io2) = NetworkIoSimulator::new(0.1, 500);
+            let (io1, io2) = NetworkIoSimulator::new(0.3, 500);
             concurrent_send_recv(io1, io2).await;
         });
     }
