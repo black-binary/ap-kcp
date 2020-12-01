@@ -259,10 +259,10 @@ impl<IO: KcpIo + Send + Sync + 'static> KcpHandle<IO> {
         loop {
             let interval = {
                 let mut core = core.lock().await;
-                let flush_fut = core.flush(&*io);
-                if let Err(e) = flush_fut.await {
+                if let Err(e) = core.flush(&*io).await {
                     if let KcpError::Shutdown(ref s) = e {
                         let stream_id = core.get_stream_id();
+                        // Release the mutex
                         drop(core);
                         log::warn!("kcp core is shutting down: {}", s);
                         let _ = dead_tx.send(stream_id).await;

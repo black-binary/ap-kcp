@@ -301,7 +301,7 @@ impl KcpCore {
     }
 
     fn remove_from_send_window(&mut self, sequence: u32) {
-        // Make sure send_una <= seq < send_next
+        // Make sure send_unack <= seq < send_next
         if i32diff(sequence, self.send_unack) < 0 || i32diff(sequence, self.send_next) >= 0 {
             return;
         }

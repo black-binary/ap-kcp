@@ -41,12 +41,12 @@ impl<IO: KcpIo + Send + Sync, C: Crypto> KcpIo for CryptoLayer<IO, C> {
     }
 }
 
-struct OneNonceSequence<'a> {
+struct OnceNonceSequence<'a> {
     nonce_bytes: &'a [u8; aead::NONCE_LEN],
     used: bool,
 }
 
-impl<'a> NonceSequence for OneNonceSequence<'a> {
+impl<'a> NonceSequence for OnceNonceSequence<'a> {
     fn advance(&mut self) -> Result<aead::Nonce, Unspecified> {
         if self.used {
             return Err(Unspecified {});
@@ -56,7 +56,7 @@ impl<'a> NonceSequence for OneNonceSequence<'a> {
     }
 }
 
-impl<'a> OneNonceSequence<'a> {
+impl<'a> OnceNonceSequence<'a> {
     fn new(nonce_bytes: &'a [u8; aead::NONCE_LEN]) -> Self {
         Self {
             nonce_bytes,
@@ -108,7 +108,7 @@ impl Crypto for AeadCrypto {
 
         let mut nonce = [0u8; aead::NONCE_LEN];
         self.random.fill(&mut nonce).unwrap();
-        let nonce_sequence = OneNonceSequence::new(&nonce);
+        let nonce_sequence = OnceNonceSequence::new(&nonce);
 
         let mut sealing_key = aead::SealingKey::new(unbound_key, nonce_sequence);
         // | ENCRPYTED | TAG | NONCE |
@@ -132,7 +132,7 @@ impl Crypto for AeadCrypto {
 
         buf.truncate(len - aead::NONCE_LEN);
 
-        let nonce_sequence = OneNonceSequence::new(&nonce);
+        let nonce_sequence = OnceNonceSequence::new(&nonce);
         let mut opening_key = aead::OpeningKey::new(unbound_key, nonce_sequence);
 
         let len = if let Ok(plaintext) = opening_key.open_in_place(aead::Aad::empty(), buf) {
