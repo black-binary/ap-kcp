@@ -23,6 +23,18 @@ arm-unknown-linux-musleabihf:
 
 aarch64-linux-android:
 	cross build --release --bin ap-kcp-tun --features build_binary --target $@
-	zip $@.zip ./target/$@/release/ap-kcp-tun
+	zip $@.zip -j ./target/$@/release/ap-kcp-tun
 
-all: x86_64-unknown-linux-musl aarch64-unknown-linux-musl armv7-unknown-linux-musleabihf armv5te-unknown-linux-musleabi arm-unknown-linux-musleabihf aarch64-linux-android
+arm-linux-androideabi:
+	cross build --release --bin ap-kcp-tun --features build_binary --target $@
+	zip $@.zip -j ./target/$@/release/ap-kcp-tun
+
+armv7-linux-androideabi:
+	cross build --release --bin ap-kcp-tun --features build_binary --target $@
+	zip $@.zip -j ./target/$@/release/ap-kcp-tun
+
+all: x86_64-unknown-linux-musl aarch64-unknown-linux-musl armv7-unknown-linux-musleabihf armv5te-unknown-linux-musleabi arm-unknown-linux-musleabihf aarch64-linux-android arm-linux-androideabi armv7-linux-androideabi
+
+clean:
+	cargo clean
+	rm *.zip
