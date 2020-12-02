@@ -107,11 +107,11 @@ impl Default for KcpConfig {
             fast_rexmit_thresh: 3,
             fast_ack_thresh: 32,
             congestion: Congestion::LossTolerance,
-            max_rexmit_time: 32,
+            max_rexmit_time: 0x800,
             min_rto: 20,
             send_window_size: 0x1000,
             recv_window_size: 0x1000,
-            timeout: 5000,
+            timeout: 30000,
             keep_alive_interval: 1500,
             name: "".to_string(),
         }

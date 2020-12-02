@@ -241,12 +241,11 @@ impl<IO: KcpIo + Send + Sync + 'static> KcpHandle<IO> {
         dead_rx: Receiver<u16>,
     ) -> KcpResult<()> {
         loop {
-            let stream_id = dead_rx
-                .recv()
-                .await
-                .map_err(|_| KcpError::Shutdown("cleaning but kcp handle is closed".to_string()))?;
+            let stream_id = dead_rx.recv().await.map_err(|_| {
+                KcpError::Shutdown("cleaning but the kcp handle is closed".to_string())
+            })?;
             sessions.lock().await.remove(&stream_id);
-            log::debug!("cleaning {}", stream_id);
+            log::debug!("cleaned {}", stream_id);
         }
     }
 
@@ -268,8 +267,8 @@ impl<IO: KcpIo + Send + Sync + 'static> KcpHandle<IO> {
                         let _ = dead_tx.send(stream_id).await;
                         return Err(e);
                     } else {
-                        log::error!("flush error: {}, retrying..", e);
                         // Sleep and continue
+                        log::error!("flush error: {}, retrying...", e);
                         let r = rand::random::<u32>() % core.config.max_interval;
                         core.config.max_interval + r
                     }
@@ -311,18 +310,18 @@ impl<IO: KcpIo + Send + Sync + 'static> KcpHandle<IO> {
             let stream_id = KcpSegment::peek_stream_id(&buf);
             let mut cursor = buf.as_slice();
             let mut segments = Vec::new();
-            let mut is_invalid_packet = false;
+            let mut invalid_packet = false;
             let mut new_stream = false;
 
             while cursor.has_remaining() {
                 match KcpSegment::decode(&cursor) {
                     Ok(segment) => {
                         if segment.stream_id != stream_id {
-                            is_invalid_packet = true;
+                            invalid_packet = true;
                             log::error!("invalid packet format");
                             break;
                         }
-                        // First push or ping
+                        // First PUSH or PING packet
                         if (segment.command == CMD_PUSH || segment.command == CMD_PING)
                             && segment.sequence == 0
                         {
@@ -333,13 +332,13 @@ impl<IO: KcpIo + Send + Sync + 'static> KcpHandle<IO> {
                     }
                     Err(e) => {
                         log::error!("malformed packet: {}", e);
-                        is_invalid_packet = true;
+                        invalid_packet = true;
                         break;
                     }
                 }
             }
 
-            if is_invalid_packet {
+            if invalid_packet {
                 continue;
             }
 
