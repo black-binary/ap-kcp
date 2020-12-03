@@ -23,7 +23,6 @@ pub mod test {
     use crate::core::KcpConfig;
 
     use super::*;
-    use bytes::Bytes;
     use log::LevelFilter;
     use rand::prelude::*;
     use smol::channel::{bounded, Receiver, Sender};
@@ -140,8 +139,8 @@ pub mod test {
     pub struct NetworkIoSimulator {
         packet_loss: f64,
         delay: u64,
-        tx: Sender<Bytes>,
-        rx: Receiver<Bytes>,
+        tx: Sender<Vec<u8>>,
+        rx: Receiver<Vec<u8>>,
     }
 
     impl NetworkIoSimulator {
@@ -170,7 +169,8 @@ pub mod test {
             let tx = self.tx.clone();
             let delay = self.delay;
             let loss = self.packet_loss;
-            let packet = Bytes::copy_from_slice(buf);
+            let mut packet = Vec::new();
+            packet.extend_from_slice(buf);
             smol::spawn(async move {
                 Timer::after(Duration::from_millis(delay)).await;
                 if !rand::thread_rng().gen_bool(loss) {
@@ -183,15 +183,13 @@ pub mod test {
             Ok(())
         }
 
-        async fn recv_packet(&self, buf: &mut Vec<u8>) -> std::io::Result<()> {
+        async fn recv_packet(&self) -> std::io::Result<Vec<u8>> {
             let packet = self
                 .rx
                 .recv()
                 .await
                 .map_err(|_| std::io::ErrorKind::ConnectionReset)?;
-            buf.resize(packet.len(), 0);
-            buf.copy_from_slice(&packet);
-            Ok(())
+            Ok(packet)
         }
     }
 
@@ -355,6 +353,38 @@ pub mod test {
             let mut stream2 = kcp2.accept().await.unwrap();
             stream2.read(&mut buf).await.unwrap();
             stream2.close().await.unwrap();
+            t.await;
+        });
+    }
+
+    #[test]
+    fn session() {
+        init();
+        let data = random_data();
+        smol::block_on(async move {
+            udp_session(data).await;
+        });
+    }
+
+    pub async fn udp_session(data: Arc<Vec<u8>>) {
+        smol::block_on(async move {
+            let (io1, io2) = get_udp_pair().await;
+            let handle1 = KcpHandle::new(io1, KcpConfig::default()).unwrap();
+            let data1 = data.clone();
+            let t = smol::spawn(async move {
+                let io2 = udp::UdpListener::new(io2);
+                let session = io2.accept().await;
+                let handle2 = KcpHandle::new(session, KcpConfig::default()).unwrap();
+                let mut stream2 = handle2.accept().await.unwrap();
+                let mut buf = Vec::new();
+                buf.resize(data1.len(), 0);
+                stream2.read_exact(&mut buf).await.unwrap();
+                assert_eq!(&buf[..], &data1[..]);
+                stream2.close().await.unwrap();
+            });
+            let mut stream1 = handle1.connect().await.unwrap();
+            stream1.write_all(&data).await.unwrap();
+            stream1.close().await.unwrap();
             t.await;
         });
     }

@@ -1,9 +1,8 @@
 use std::{num::NonZeroU32, sync::Arc};
 
-use bytes::{Bytes, BytesMut};
+use aead::LessSafeKey;
 use ring::{
-    aead::{self, BoundKey, Nonce, NonceSequence},
-    error::Unspecified,
+    aead::{self, Nonce, UnboundKey, NONCE_LEN},
     pbkdf2,
     rand::SecureRandom,
     rand::SystemRandom,
@@ -13,7 +12,7 @@ use crate::core::KcpIo;
 
 pub trait Crypto: Send + Sync {
     fn encrypt(&self, buf: &mut Vec<u8>);
-    fn decrypt(&self, buf: &mut Vec<u8>);
+    fn decrypt(&self, buf: &mut Vec<u8>) -> bool;
 }
 
 pub struct CryptoLayer<IO, C> {
@@ -34,39 +33,18 @@ impl<IO: KcpIo + Send + Sync, C: Crypto> KcpIo for CryptoLayer<IO, C> {
         self.io.send_packet(buf).await
     }
 
-    async fn recv_packet(&self, buf: &mut Vec<u8>) -> std::io::Result<()> {
-        self.io.recv_packet(buf).await?;
-        self.crypto.decrypt(buf);
-        Ok(())
-    }
-}
-
-struct OnceNonceSequence<'a> {
-    nonce_bytes: &'a [u8; aead::NONCE_LEN],
-    used: bool,
-}
-
-impl<'a> NonceSequence for OnceNonceSequence<'a> {
-    fn advance(&mut self) -> Result<aead::Nonce, Unspecified> {
-        if self.used {
-            return Err(Unspecified {});
-        }
-        self.used = true;
-        Ok(Nonce::assume_unique_for_key(self.nonce_bytes.clone()))
-    }
-}
-
-impl<'a> OnceNonceSequence<'a> {
-    fn new(nonce_bytes: &'a [u8; aead::NONCE_LEN]) -> Self {
-        Self {
-            nonce_bytes,
-            used: false,
+    async fn recv_packet(&self) -> std::io::Result<Vec<u8>> {
+        loop {
+            let mut packet = self.io.recv_packet().await?;
+            if self.crypto.decrypt(&mut packet) {
+                return Ok(packet);
+            }
         }
     }
 }
 
 pub struct AeadCrypto {
-    key_bytes: Bytes,
+    key: LessSafeKey,
     algorithm: &'static aead::Algorithm,
     random: SystemRandom,
 }
@@ -74,7 +52,7 @@ pub struct AeadCrypto {
 impl AeadCrypto {
     pub fn new(key: &[u8], algorithm: &'static aead::Algorithm) -> Self {
         let salt = b"ap-kcp-aead-salt";
-        let mut key_bytes = BytesMut::with_capacity(algorithm.key_len());
+        let mut key_bytes = Vec::with_capacity(algorithm.key_len());
         key_bytes.resize(algorithm.key_len(), 0);
         pbkdf2::derive(
             pbkdf2::PBKDF2_HMAC_SHA256,
@@ -83,9 +61,10 @@ impl AeadCrypto {
             key,
             &mut key_bytes,
         );
-        let key_bytes = key_bytes.freeze();
+        let key = UnboundKey::new(algorithm, &key_bytes).unwrap();
+        let key = LessSafeKey::new(key);
         Self {
-            key_bytes,
+            key,
             algorithm,
             random: SystemRandom::new(),
         }
@@ -97,51 +76,45 @@ impl<C: Crypto> Crypto for Arc<C> {
         C::encrypt(self, buf)
     }
 
-    fn decrypt(&self, buf: &mut Vec<u8>) {
+    fn decrypt(&self, buf: &mut Vec<u8>) -> bool {
         C::decrypt(self, buf)
     }
 }
 
 impl Crypto for AeadCrypto {
     fn encrypt(&self, buf: &mut Vec<u8>) {
-        let unbound_key = aead::UnboundKey::new(&self.algorithm, &self.key_bytes).unwrap();
+        let mut nonce_bytes = [0u8; NONCE_LEN];
+        self.random.fill(&mut nonce_bytes).unwrap();
+        let nonce = Nonce::assume_unique_for_key(nonce_bytes);
 
-        let mut nonce = [0u8; aead::NONCE_LEN];
-        self.random.fill(&mut nonce).unwrap();
-        let nonce_sequence = OnceNonceSequence::new(&nonce);
-
-        let mut sealing_key = aead::SealingKey::new(unbound_key, nonce_sequence);
         // | ENCRPYTED | TAG | NONCE |
-        sealing_key
-            .seal_in_place_append_tag(aead::Aad::empty(), buf)
+        self.key
+            .seal_in_place_append_tag(nonce, aead::Aad::empty(), buf)
             .unwrap();
 
-        buf.extend_from_slice(&nonce);
+        buf.extend_from_slice(&nonce_bytes);
     }
 
-    fn decrypt(&self, buf: &mut Vec<u8>) {
+    fn decrypt(&self, buf: &mut Vec<u8>) -> bool {
         if buf.len() < aead::NONCE_LEN + self.algorithm.tag_len() {
-            buf.clear();
-            return;
+            return false;
         }
 
         let len = buf.len();
-        let unbound_key = aead::UnboundKey::new(&self.algorithm, &self.key_bytes).unwrap();
-        let mut nonce = [0u8; aead::NONCE_LEN];
-        nonce.copy_from_slice(&buf[len - aead::NONCE_LEN..]);
+        let mut nonce_bytes = [0u8; aead::NONCE_LEN];
+        nonce_bytes.copy_from_slice(&buf[len - aead::NONCE_LEN..]);
+        let nonce = Nonce::assume_unique_for_key(nonce_bytes);
 
         buf.truncate(len - aead::NONCE_LEN);
 
-        let nonce_sequence = OnceNonceSequence::new(&nonce);
-        let mut opening_key = aead::OpeningKey::new(unbound_key, nonce_sequence);
-
-        let len = if let Ok(plaintext) = opening_key.open_in_place(aead::Aad::empty(), buf) {
+        let len = if let Ok(plaintext) = self.key.open_in_place(nonce, aead::Aad::empty(), buf) {
             plaintext.len()
         } else {
             log::error!("failed to decrypt");
-            0
+            return false;
         };
         buf.truncate(len);
+        true
     }
 }
 

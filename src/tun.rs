@@ -1,16 +1,16 @@
-use std::{collections::HashMap, fs, net::SocketAddr, sync::Arc};
+use std::{fs, sync::Arc};
 
-use bytes::Bytes;
 use clap::{App, Arg};
 use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use log::LevelFilter;
 use ring::aead;
 use smol::{
-    channel::{bounded, Receiver, Sender},
     future::FutureExt,
     net::{TcpListener, TcpStream, UdpSocket},
     Task,
 };
+
+use crate::udp::{UdpListener, UdpSession};
 
 mod async_kcp;
 mod core;
@@ -25,101 +25,6 @@ use crate::{
     crypto::{AeadCrypto, Crypto, CryptoLayer},
     error::KcpResult,
 };
-
-struct UdpListener {
-    accept_rx: Receiver<UdpSession>,
-    _task: Task<KcpResult<()>>,
-}
-
-impl UdpListener {
-    async fn accept(&self) -> UdpSession {
-        self.accept_rx.recv().await.unwrap()
-    }
-
-    fn new(udp: UdpSocket) -> Self {
-        let udp = Arc::new(udp);
-        let (accept_tx, accept_rx) = bounded(0x10);
-        let _task = {
-            let mut sessions = HashMap::<String, Sender<Bytes>>::new();
-            let udp = udp.clone();
-            let mut jammed_counter = 0;
-            smol::spawn(async move {
-                let mut buf = Vec::new();
-                buf.resize(0x1000, 0u8);
-                loop {
-                    let (size, addr) = udp.recv_from(&mut buf).await?;
-                    let payload = Bytes::copy_from_slice(&buf[..size]);
-                    let mut should_clean = false;
-                    if let Some(tx) = sessions.get(&addr.to_string()) {
-                        if tx.is_closed() {
-                            should_clean = true;
-                        } else if tx.try_send(payload).is_err() {
-                            log::debug!("the channel got jammed!");
-                            jammed_counter += 1;
-                            if jammed_counter > 1000 {
-                                jammed_counter = 0;
-                                log::debug!("high load detected");
-                            }
-                        }
-                    } else {
-                        let (tx, rx) = bounded(0x200);
-                        sessions.insert(addr.to_string(), tx.clone());
-                        let session = UdpSession {
-                            udp: udp.clone(),
-                            rx,
-                            remote: addr,
-                        };
-                        accept_tx.send(session).await.unwrap();
-                        tx.send(payload).await.unwrap();
-                        should_clean = true;
-                    }
-                    if should_clean {
-                        log::info!("cleaning dead session...");
-                        sessions.retain(|_, tx| !tx.is_closed());
-                    }
-                }
-            })
-        };
-        Self { _task, accept_rx }
-    }
-}
-
-struct UdpSession {
-    remote: SocketAddr,
-    rx: Receiver<Bytes>,
-    udp: Arc<UdpSocket>,
-}
-
-impl Drop for UdpSession {
-    fn drop(&mut self) {
-        self.rx.close();
-    }
-}
-
-#[async_trait::async_trait]
-impl core::KcpIo for UdpSession {
-    async fn send_packet(&self, buf: &mut Vec<u8>) -> std::io::Result<()> {
-        self.udp.send_to(buf, self.remote).await?;
-        Ok(())
-    }
-
-    async fn recv_packet(&self, buf: &mut Vec<u8>) -> std::io::Result<()> {
-        loop {
-            let payload = self
-                .rx
-                .recv()
-                .await
-                .map_err(|_| std::io::ErrorKind::ConnectionReset)?;
-            if payload.len() > buf.len() {
-                log::error!("long packet");
-                continue;
-            }
-            buf.truncate(payload.len());
-            buf.copy_from_slice(&payload);
-            return Ok(());
-        }
-    }
-}
 
 async fn relay<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
     reader: &mut R,
@@ -183,7 +88,7 @@ async fn server<C: Crypto + 'static>(
 
     loop {
         let udp_session = listener.accept().await;
-        log::trace!("udp session accepted: {}", udp_session.remote);
+        log::trace!("udp session accepted: {}", udp_session.get_remote());
         let udp_session = CryptoLayer::wrap(udp_session, crypto.clone());
         let kcp_handle = Arc::new(KcpHandle::new(udp_session, config.clone()).unwrap());
         let t: Task<KcpResult<()>> = {

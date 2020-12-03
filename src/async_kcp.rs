@@ -295,20 +295,21 @@ impl<IO: KcpIo + Send + Sync + 'static> KcpHandle<IO> {
         accept_tx: Sender<KcpStream>,
         dead_tx: Sender<u16>,
     ) -> KcpResult<()> {
-        let mut buf = Vec::new();
         loop {
-            buf.resize(2 * config.mtu, 0);
-            if let Err(e) = io.recv_packet(&mut buf).await {
-                log::error!("recv error: {}", e);
-                return Err(KcpError::IoError(e));
-            }
-            if buf.len() < HEADER_SIZE {
-                log::error!("short packet length {}", buf.len());
+            let packet = match io.recv_packet().await {
+                Ok(packet) => packet,
+                Err(e) => {
+                    log::error!("recv error: {}", e);
+                    return Err(KcpError::IoError(e));
+                }
+            };
+            if packet.len() < HEADER_SIZE {
+                log::error!("short packet length {}", packet.len());
                 continue;
             }
 
-            let stream_id = KcpSegment::peek_stream_id(&buf);
-            let mut cursor = buf.as_slice();
+            let stream_id = KcpSegment::peek_stream_id(&packet);
+            let mut cursor = packet.as_slice();
             let mut segments = Vec::new();
             let mut invalid_packet = false;
             let mut new_stream = false;

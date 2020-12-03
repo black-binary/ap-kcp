@@ -23,7 +23,7 @@ pub const MAX_WINDOW_SIZE: u16 = 0x8000;
 #[async_trait::async_trait]
 pub trait KcpIo {
     async fn send_packet(&self, buf: &mut Vec<u8>) -> std::io::Result<()>;
-    async fn recv_packet(&self, buf: &mut Vec<u8>) -> std::io::Result<()>;
+    async fn recv_packet(&self) -> std::io::Result<Vec<u8>>;
 }
 
 #[inline(always)]
@@ -104,7 +104,7 @@ impl Default for KcpConfig {
             nodelay: false,
             mtu: 1400 - 28,
             mss: 1400 - 28 - HEADER_SIZE,
-            fast_rexmit_thresh: 3,
+            fast_rexmit_thresh: 16,
             fast_ack_thresh: 32,
             congestion: Congestion::LossTolerance,
             max_rexmit_time: 0x800,
