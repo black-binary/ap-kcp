@@ -138,7 +138,20 @@ fn get_algorithm(name: &str) -> &'static aead::Algorithm {
         "aes-256-gcm" => &aead::AES_256_GCM,
         "chacha20-poly1305" => &aead::CHACHA20_POLY1305,
         _ => {
-            panic!("no algorithm named {}", name)
+            panic!("no such algorithm {}", name)
+        }
+    }
+}
+
+fn get_level(name: &str) -> LevelFilter {
+    match name {
+        "trace" => LevelFilter::Trace,
+        "debug" => LevelFilter::Debug,
+        "info" => LevelFilter::Info,
+        "warn" => LevelFilter::Warn,
+        "error" => LevelFilter::Error,
+        _ => {
+            panic!("no such level {}", name)
         }
     }
 }
@@ -179,6 +192,12 @@ fn main() {
                 .required(true),
         )
         .arg(
+            Arg::with_name("level")
+                .long("level")
+                .takes_value(true)
+                .default_value("info"),
+        )
+        .arg(
             Arg::with_name("algorithm")
                 .long("algorithm")
                 .short("a")
@@ -209,8 +228,9 @@ fn main() {
     let thread = num_cpus::get() + 2;
     std::env::set_var("SMOL_THREADS", thread.to_string());
 
+    let level = matches.value_of("level").unwrap();
     let _ = env_logger::builder()
-        .filter_module("ap_kcp", LevelFilter::Info)
+        .filter_module("ap_kcp", get_level(level))
         .try_init();
 
     let config = match matches.value_of("kcp-config") {

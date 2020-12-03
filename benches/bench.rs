@@ -1,6 +1,8 @@
+#[cfg(features = "crypto_support")]
 use ap_kcp::crypto::{AeadCrypto, CryptoLayer};
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use rand::prelude::*;
+#[cfg(features = "crypto_support")]
 use ring::aead;
 use smol::{net::UdpSocket, prelude::*};
 use std::{fs::File, sync::Arc};
@@ -48,6 +50,7 @@ pub fn udp(data: Arc<Vec<u8>>) {
     });
 }
 
+#[cfg(features = "crypto_support")]
 pub fn udp_crypto(data: Arc<Vec<u8>>) {
     smol::block_on(async move {
         let (io1, io2) = get_udp_pair().await;
@@ -80,7 +83,6 @@ pub fn xmit_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("xmit");
     group.throughput(Throughput::Bytes(DATA_SIZE as u64));
     group.bench_function("udp", |b| b.iter(|| udp(data.clone())));
-    group.bench_function("udp_crypto", |b| b.iter(|| udp_crypto(data.clone())));
 
     {
         let guard = pprof::ProfilerGuard::new(1000).unwrap();
@@ -94,6 +96,9 @@ pub fn xmit_benchmark(c: &mut Criterion) {
         };
     }
 
+    #[cfg(features = "crypto_support")]
+    group.bench_function("udp_crypto", |b| b.iter(|| udp_crypto(data.clone())));
+    #[cfg(features = "crypto_support")]
     {
         let guard = pprof::ProfilerGuard::new(1000).unwrap();
         if let Ok(report) = guard.report().build() {
