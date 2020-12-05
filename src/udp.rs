@@ -56,7 +56,7 @@ impl UdpListener {
                         if tx.is_closed() {
                             should_clean = true;
                         } else if tx.try_send(buf).is_err() {
-                            log::debug!("the channel got jammed!");
+                            log::debug!("the channel got jammed {}", addr);
                         }
                     } else {
                         let (tx, rx) = bounded(0x200);
@@ -103,7 +103,7 @@ impl UdpSession {
 #[async_trait::async_trait]
 impl KcpIo for UdpSession {
     async fn send_packet(&self, buf: &mut Vec<u8>) -> std::io::Result<()> {
-        self.udp.send_to(buf, self.remote).await?;
+        self.udp.send_to(buf, &self.remote).await?;
         Ok(())
     }
 
@@ -113,6 +113,6 @@ impl KcpIo for UdpSession {
             .recv()
             .await
             .map_err(|_| std::io::ErrorKind::ConnectionReset)?;
-        return Ok(packet);
+        Ok(packet)
     }
 }

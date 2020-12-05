@@ -8,13 +8,14 @@ use std::{
 };
 
 use bytes::{Buf, Bytes};
-use futures::{ready, AsyncRead, AsyncWrite, Future};
+use futures::{ready, AsyncRead, AsyncWrite};
 use smol::{
     channel::{bounded, Receiver, Sender},
     future::FutureExt,
-    lock::{Mutex, MutexGuardArc},
     Task, Timer,
 };
+
+use fast_async_mutex::mutex::{Mutex, MutexOwnedGuard, MutexOwnedGuardFuture};
 
 use crate::{
     core::{KcpConfig, KcpCore, KcpIo},
@@ -22,15 +23,13 @@ use crate::{
     segment::{KcpSegment, CMD_PING, CMD_PUSH, HEADER_SIZE},
 };
 
-type LockCoreFuture = Pin<Box<dyn Future<Output = MutexGuardArc<KcpCore>> + Send>>;
-
 pub struct KcpStream {
     core: Arc<Mutex<KcpCore>>,
     read_buffer: Option<VecDeque<Bytes>>,
-    recv_lock_future: Option<LockCoreFuture>,
-    send_lock_future: Option<LockCoreFuture>,
-    flush_lock_future: Option<LockCoreFuture>,
-    close_lock_future: Option<LockCoreFuture>,
+    recv_lock_future: Option<MutexOwnedGuardFuture<KcpCore>>,
+    send_lock_future: Option<MutexOwnedGuardFuture<KcpCore>>,
+    flush_lock_future: Option<MutexOwnedGuardFuture<KcpCore>>,
+    close_lock_future: Option<MutexOwnedGuardFuture<KcpCore>>,
 }
 
 impl Drop for KcpStream {
@@ -49,22 +48,27 @@ impl KcpStream {
     fn lock_core(
         cx: &mut Context<'_>,
         core: Arc<Mutex<KcpCore>>,
-        future_storage: &mut Option<Pin<Box<dyn Future<Output = MutexGuardArc<KcpCore>> + Send>>>,
-    ) -> Poll<MutexGuardArc<KcpCore>> {
-        if future_storage.is_none() {
-            if let Some(core) = core.try_lock_arc() {
-                return Poll::Ready(core);
+        future_storage: &mut Option<MutexOwnedGuardFuture<KcpCore>>,
+    ) -> Poll<MutexOwnedGuard<KcpCore>> {
+        match future_storage {
+            Some(fut) => {
+                let guard = ready!(fut.poll(cx));
+                *future_storage = None;
+                return Poll::Ready(guard);
             }
-            let fut = {
-                let core = core.clone();
-                async move { core.lock_arc().await }
+            None => {
+                let mut fut = core.lock_owned();
+                match fut.poll(cx) {
+                    Poll::Ready(guard) => {
+                        return Poll::Ready(guard);
+                    }
+                    Poll::Pending => {
+                        *future_storage = Some(fut);
+                        return Poll::Pending;
+                    }
+                }
             }
-            .boxed();
-            *future_storage = Some(fut);
         }
-        let core = ready!(future_storage.as_mut().unwrap().poll(cx));
-        *future_storage = None;
-        Poll::Ready(core)
     }
 }
 
@@ -162,13 +166,14 @@ pub struct KcpHandle<T> {
 impl<T> Drop for KcpHandle<T> {
     fn drop(&mut self) {
         smol::block_on(async move {
+            log::debug!("dropping kcp handle");
             self.accept_rx.close();
             let sessions = self.sessions.lock().await;
             for (_, session) in sessions.iter() {
                 let _ = session.core.lock().await.force_close();
             }
         });
-        log::trace!("kcp handle dropped");
+        log::debug!("dropped kcp handle");
     }
 }
 
@@ -255,12 +260,12 @@ impl<IO: KcpIo + Send + Sync + 'static> KcpHandle<IO> {
         flush_notify_rx: Receiver<()>,
         dead_tx: Sender<u16>,
     ) -> KcpResult<()> {
+        let stream_id = core.lock().await.get_stream_id();
         loop {
             let interval = {
                 let mut core = core.lock().await;
                 if let Err(e) = core.flush(&*io).await {
                     if let KcpError::Shutdown(ref s) = e {
-                        let stream_id = core.get_stream_id();
                         // Release the mutex
                         drop(core);
                         log::warn!("kcp core is shutting down: {}", s);
@@ -300,6 +305,8 @@ impl<IO: KcpIo + Send + Sync + 'static> KcpHandle<IO> {
                 Ok(packet) => packet,
                 Err(e) => {
                     log::error!("recv error: {}", e);
+                    dead_tx.close();
+                    accept_tx.close();
                     return Err(KcpError::IoError(e));
                 }
             };
@@ -393,10 +400,7 @@ impl<IO: KcpIo + Send + Sync + 'static> KcpHandle<IO> {
                 };
             }
 
-            if let Err(e) = core.lock().await.input(segments) {
-                log::trace!("removing dead link {}", e);
-                sessions.lock().await.remove(&stream_id);
-            };
+            core.lock().await.input(segments).unwrap();
         }
     }
 
